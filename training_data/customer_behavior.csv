@@ -1,0 +1,41 @@
+customer_id,age,income,spending_score,annual_spending,membership_years,gender,education_level,preferred_category,churn
+1,23,15000,81,12000,1,Female,High School,Fashion,0
+2,35,60000,75,45000,5,Male,Bachelor,Electronics,0
+3,45,85000,42,35000,8,Female,Master,Home,0
+4,28,32000,88,28000,2,Male,Bachelor,Sports,1
+5,55,120000,35,42000,12,Female,PhD,Books,0
+6,31,48000,76,36000,3,Female,Bachelor,Fashion,0
+7,40,95000,55,52000,7,Male,Master,Electronics,0
+8,26,28000,92,26000,1,Female,High School,Beauty,1
+9,52,110000,28,31000,15,Male,PhD,Home,0
+10,33,58000,82,47000,4,Male,Bachelor,Sports,0
+11,29,42000,89,37000,2,Female,Bachelor,Fashion,1
+12,38,72000,68,49000,6,Female,Master,Electronics,0
+13,47,98000,38,37000,10,Male,Master,Books,0
+14,24,22000,95,21000,1,Female,High School,Beauty,1
+15,41,88000,45,39000,9,Male,Bachelor,Home,0
+16,36,65000,73,48000,5,Female,Bachelor,Fashion,0
+17,50,105000,32,33000,13,Male,PhD,Books,0
+18,27,35000,87,31000,2,Male,Bachelor,Sports,1
+19,44,92000,41,38000,8,Female,Master,Home,0
+20,32,52000,78,41000,4,Female,Bachelor,Electronics,0
+21,25,30000,90,27000,1,Female,High School,Fashion,1
+22,43,85000,48,41000,7,Male,Master,Books,0
+23,37,68000,71,50000,6,Female,Bachelor,Electronics,0
+24,49,100000,36,35000,11,Male,Master,Home,0
+25,30,45000,84,38000,3,Female,Bachelor,Beauty,0
+26,39,78000,59,46000,7,Male,Bachelor,Sports,0
+27,46,95000,39,37000,9,Female,Master,Books,0
+28,34,58000,79,45000,4,Male,Bachelor,Electronics,0
+29,42,89000,46,42000,8,Female,Master,Home,0
+30,28,38000,86,34000,2,Male,Bachelor,Sports,1
+31,51,108000,31,32000,14,Male,PhD,Books,0
+32,35,62000,74,47000,5,Female,Bachelor,Fashion,0
+33,48,96000,37,36000,10,Male,Master,Home,0
+34,26,32000,91,29000,1,Female,High School,Beauty,1
+35,40,82000,52,44000,7,Male,Bachelor,Electronics,0
+36,33,55000,80,42000,4,Female,Bachelor,Fashion,0
+37,45,93000,43,40000,9,Female,Master,Books,0
+38,29,41000,85,36000,2,Male,Bachelor,Sports,1
+39,53,115000,29,30000,16,Male,PhD,Home,0
+40,37,69000,70,49000,6,Female,Bachelor,Electronics,0
