@@ -1276,6 +1276,194 @@ def make_prediction():
     except Exception as e:
         return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
+@app.route('/api/data-quality-report', methods=['POST'])
+def generate_data_quality_report():
+    """Generate comprehensive data quality report"""
+    try:
+        data = request.json
+        
+        if not data or 'csv_data' not in data:
+            return jsonify({'error': 'No CSV data provided'}), 400
+        
+        csv_data = data['csv_data']
+        
+        # Clean data and create DataFrame
+        cleaned_csv_data = []
+        for i, row in enumerate(csv_data):
+            cleaned_row = {}
+            for key, value in row.items():
+                cleaned_row[key] = clean_complex_types(value, i, key)
+            cleaned_csv_data.append(cleaned_row)
+        
+        df = pd.DataFrame(cleaned_csv_data)
+        df = clean_dataframe(df)
+        
+        # Generate quality report
+        report = {
+            'totalRows': len(df),
+            'totalColumns': len(df.columns),
+            'missingValues': {},
+            'duplicates': 0,
+            'outliers': {},
+            'dataTypes': {},
+            'memoryUsage': df.memory_usage(deep=True).sum(),
+            'summary': {}
+        }
+        
+        # Count missing values per column
+        for col in df.columns:
+            missing_count = df[col].isnull().sum()
+            report['missingValues'][col] = int(missing_count)
+            report['dataTypes'][col] = str(df[col].dtype)
+        
+        # Count duplicate rows
+        report['duplicates'] = int(df.duplicated().sum())
+        
+        # Detect outliers for numeric columns using IQR method
+        for col in df.columns:
+            if df[col].dtype in ['int64', 'float64', 'Int64']:
+                values = df[col].dropna()
+                if len(values) > 0:
+                    Q1 = values.quantile(0.25)
+                    Q3 = values.quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    outliers = values[(values < lower_bound) | (values > upper_bound)]
+                    if len(outliers) > 0:
+                        report['outliers'][col] = int(len(outliers))
+        
+        # Generate summary statistics
+        for col in df.columns:
+            if df[col].dtype in ['int64', 'float64', 'Int64']:
+                col_data = df[col].dropna()
+                if len(col_data) > 0:
+                    report['summary'][col] = {
+                        'type': 'numeric',
+                        'count': int(len(col_data)),
+                        'mean': float(col_data.mean()),
+                        'std': float(col_data.std()),
+                        'min': float(col_data.min()),
+                        'max': float(col_data.max()),
+                        'unique': int(col_data.nunique())
+                    }
+            else:
+                col_data = df[col].dropna()
+                if len(col_data) > 0:
+                    report['summary'][col] = {
+                        'type': 'categorical',
+                        'count': int(len(col_data)),
+                        'unique': int(col_data.nunique()),
+                        'top': str(col_data.mode().iloc[0]) if len(col_data.mode()) > 0 else 'N/A',
+                        'freq': int(col_data.value_counts().iloc[0]) if len(col_data.value_counts()) > 0 else 0
+                    }
+        
+        return jsonify(report)
+        
+    except Exception as e:
+        return jsonify({'error': f'Quality report generation failed: {str(e)}'}), 500
+
+@app.route('/api/clean-data', methods=['POST'])
+def clean_data():
+    """Clean data based on user preferences"""
+    try:
+        data = request.json
+        
+        if not data or 'csv_data' not in data:
+            return jsonify({'error': 'No CSV data provided'}), 400
+        
+        csv_data = data['csv_data']
+        cleaning_options = data.get('cleaning_options', {})
+        
+        # Clean data and create DataFrame
+        cleaned_csv_data = []
+        for i, row in enumerate(csv_data):
+            cleaned_row = {}
+            for key, value in row.items():
+                cleaned_row[key] = clean_complex_types(value, i, key)
+            cleaned_csv_data.append(cleaned_row)
+        
+        df = pd.DataFrame(cleaned_csv_data)
+        df = clean_dataframe(df)
+        
+        # Apply cleaning operations based on user choices
+        original_size = len(df)
+        
+        # Handle missing values
+        missing_strategy = cleaning_options.get('missingValues', 'fill_mean')
+        if missing_strategy == 'remove_rows':
+            df = df.dropna()
+        elif missing_strategy == 'fill_mean':
+            # Fill numeric columns with mean
+            numeric_columns = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_columns:
+                if df[col].isnull().any():
+                    df[col].fillna(df[col].mean(), inplace=True)
+            
+            # Fill categorical columns with mode
+            categorical_columns = df.select_dtypes(include=['object']).columns
+            for col in categorical_columns:
+                if df[col].isnull().any():
+                    mode_value = df[col].mode()
+                    fill_value = mode_value[0] if not mode_value.empty else 'Unknown'
+                    df[col].fillna(fill_value, inplace=True)
+        elif missing_strategy == 'fill_mode':
+            # Fill all columns with mode
+            for col in df.columns:
+                if df[col].isnull().any():
+                    mode_value = df[col].mode()
+                    fill_value = mode_value[0] if not mode_value.empty else 'Unknown'
+                    df[col].fillna(fill_value, inplace=True)
+        
+        # Handle duplicates
+        duplicates_strategy = cleaning_options.get('duplicates', 'remove')
+        if duplicates_strategy == 'remove':
+            df = df.drop_duplicates()
+        
+        # Handle outliers
+        outliers_strategy = cleaning_options.get('outliers', 'keep')
+        if outliers_strategy == 'remove':
+            numeric_columns = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_columns:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                
+                # Remove outliers
+                df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)]
+        
+        # Convert cleaned DataFrame back to list of dictionaries
+        cleaned_result = df.to_dict('records')
+        
+        # Convert numpy types to Python native types for JSON serialization
+        for row in cleaned_result:
+            for key, value in row.items():
+                if isinstance(value, (np.integer, np.floating, np.bool_)):
+                    row[key] = value.item()
+                elif pd.isna(value):
+                    row[key] = None
+        
+        result = {
+            'cleaned_data': cleaned_result,
+            'original_size': original_size,
+            'cleaned_size': len(df),
+            'columns': list(df.columns),
+            'cleaning_summary': {
+                'missing_values_strategy': missing_strategy,
+                'duplicates_strategy': duplicates_strategy,
+                'outliers_strategy': outliers_strategy,
+                'rows_removed': original_size - len(df)
+            }
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': f'Data cleaning failed: {str(e)}'}), 500
+
 if __name__ == '__main__':
     # Create models directory
     os.makedirs('models', exist_ok=True)

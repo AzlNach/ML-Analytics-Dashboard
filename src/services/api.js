@@ -255,6 +255,53 @@ class MLAnalyticsAPI {
             throw error;
         }
     }
+
+    static async generateDataQualityReport(csvData) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/data-quality-report`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ csv_data: csvData }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Quality report generation failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Quality report generation failed:', error);
+            throw error;
+        }
+    }
+
+    static async cleanData(csvData, cleaningOptions) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/clean-data`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    csv_data: csvData,
+                    cleaning_options: cleaningOptions
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Data cleaning failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Data cleaning failed:', error);
+            throw error;
+        }
+    }
 }
 
 export default MLAnalyticsAPI;
