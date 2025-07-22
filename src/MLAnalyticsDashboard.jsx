@@ -261,127 +261,25 @@ const MLAnalyticsDashboard = () => {
 
     setLoading(true);
     try {
-      let cleaned = [...data];
-
-      // Handle missing values
-      if (cleaningOptions.missingValues === 'remove_rows') {
-        cleaned = cleaned.filter(row => 
-          !Object.values(row).some(val => 
-            val === null || val === undefined || val === ''
-          )
-        );
-      } else if (cleaningOptions.missingValues === 'fill_mean') {
-        // Calculate means for numeric columns
-        const means = {};
-        columns.forEach(col => {
-          const values = cleaned.map(row => row[col]).filter(val => 
-            typeof val === 'number' && !isNaN(val)
-          );
-          if (values.length > 0) {
-            means[col] = values.reduce((a, b) => a + b, 0) / values.length;
-          }
-        });
-
-        // Fill missing values
-        cleaned = cleaned.map(row => {
-          const newRow = {...row};
-          columns.forEach(col => {
-            if (newRow[col] === null || newRow[col] === undefined || newRow[col] === '') {
-              if (means[col] !== undefined) {
-                newRow[col] = means[col];
-              } else {
-                newRow[col] = 'Unknown';
-              }
-            }
-          });
-          return newRow;
-        });
-      } else if (cleaningOptions.missingValues === 'fill_mode') {
-        // Calculate modes for each column
-        const modes = {};
-        columns.forEach(col => {
-          const values = cleaned.map(row => row[col]).filter(val => 
-            val !== null && val !== undefined && val !== ''
-          );
-          if (values.length > 0) {
-            const counts = {};
-            values.forEach(val => counts[val] = (counts[val] || 0) + 1);
-            modes[col] = Object.keys(counts).reduce((a, b) => 
-              counts[a] > counts[b] ? a : b
-            );
-          }
-        });
-
-        // Fill missing values with mode
-        cleaned = cleaned.map(row => {
-          const newRow = {...row};
-          columns.forEach(col => {
-            if (newRow[col] === null || newRow[col] === undefined || newRow[col] === '') {
-              newRow[col] = modes[col] || 'Unknown';
-            }
-          });
-          return newRow;
-        });
-      }
-
-      // Handle duplicates
-      if (cleaningOptions.duplicates === 'remove') {
-        const seen = new Set();
-        cleaned = cleaned.filter(row => {
-          const key = JSON.stringify(row);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      }
-
-      // Handle outliers
-      if (cleaningOptions.outliers === 'remove') {
-        const outlierBounds = {};
-        
-        // Calculate bounds for numeric columns
-        columns.forEach(col => {
-          const values = cleaned.map(row => row[col]).filter(val => 
-            typeof val === 'number' && !isNaN(val)
-          );
-          
-          if (values.length > 0) {
-            values.sort((a, b) => a - b);
-            const q1 = values[Math.floor(values.length * 0.25)];
-            const q3 = values[Math.floor(values.length * 0.75)];
-            const iqr = q3 - q1;
-            outlierBounds[col] = {
-              lower: q1 - 1.5 * iqr,
-              upper: q3 + 1.5 * iqr
-            };
-          }
-        });
-
-        // Remove rows with outliers
-        cleaned = cleaned.filter(row => {
-          return !columns.some(col => {
-            const val = row[col];
-            const bounds = outlierBounds[col];
-            return bounds && (val < bounds.lower || val > bounds.upper);
-          });
-        });
-      }
-
-      setCleanedData(cleaned);
+      // Use backend API for data cleaning
+      const cleanedData = cleanDataForAPI(data);
+      const result = await MLAnalyticsAPI.cleanData(cleanedData, cleaningOptions);
+      
+      setCleanedData(result.cleaned_data);
       
       // Auto-generate and save cleaned dataset file
       const cleanedFileName = `${fileName.replace('.csv', '')}_cleaned.csv`;
-      const csvContent = generateCSVContent(cleaned, columns);
+      const csvContent = generateCSVContent(result.cleaned_data, result.columns);
       setCleanedDataFile({
         name: cleanedFileName,
         content: csvContent,
-        data: cleaned
+        data: result.cleaned_data
       });
 
       setWorkflowStep(4); // Move to modeling step
       setActiveTab('modeling');
       
-      alert(`Data cleaning completed! Dataset size: ${data.length} → ${cleaned.length} rows\nCleaned dataset saved as: ${cleanedFileName}`);
+      alert(`Data cleaning completed!\nOriginal size: ${result.original_size} rows\nCleaned size: ${result.cleaned_size} rows\nRows removed: ${result.cleaning_summary.rows_removed}\nCleaned dataset saved as: ${cleanedFileName}`);
       
     } catch (error) {
       console.error('Data cleaning failed:', error);
