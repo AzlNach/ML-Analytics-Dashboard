@@ -256,6 +256,36 @@ class MLAnalyticsAPI {
         }
     }
 
+    static async trainFromData(csvData, targetColumn, modelType = 'decision_tree', options = {}) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/train-from-data`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    csv_data: csvData,
+                    target_column: targetColumn,
+                    model_type: modelType,
+                    test_size: options.test_size || 0.2,
+                    cross_validation: options.cross_validation !== false,
+                    dataset_name: options.dataset_name || 'uploaded_data',
+                    ...options
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Training failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Training from data failed:', error);
+            throw error;
+        }
+    }
+
     static async generateDataQualityReport(csvData) {
         try {
             const response = await fetch(`${API_BASE_URL}/data-quality-report`, {
