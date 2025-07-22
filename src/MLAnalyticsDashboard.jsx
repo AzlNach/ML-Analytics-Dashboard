@@ -2480,6 +2480,8 @@ const MLAnalyticsDashboard = () => {
                     columns: columns
                   }
                 ]}
+                uploadedData={getCurrentDataset()}
+                uploadedDataName={getCurrentDatasetName()}
                 onModelTrained={(result) => {
                   setTrainedModel(result);
                   

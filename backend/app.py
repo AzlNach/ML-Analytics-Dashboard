@@ -1512,9 +1512,12 @@ def generate_data_quality_report():
                         'freq': int(col_data.value_counts().iloc[0]) if len(col_data.value_counts()) > 0 else 0
                     }
         
-        return jsonify(report)
+        return safe_json_response(convert_numpy_types(report))
         
     except Exception as e:
+        print(f"Data quality report error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'Quality report generation failed: {str(e)}'}), 500
 
 @app.route('/api/clean-data', methods=['POST'])

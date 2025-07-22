@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Brain, Database, Play, Trash2, Info, CheckCircle, Clock } from 'lucide-react';
 import MLAnalyticsAPI from './services/api';
 
-const ModelTrainingComponent = ({ trainingData, onModelTrained }) => {
+const ModelTrainingComponent = ({ trainingData, onModelTrained, uploadedData, uploadedDataName }) => {
   const [algorithms, setAlgorithms] = useState({});
   const [trainedModels, setTrainedModels] = useState([]);
   const [modelHistory, setModelHistory] = useState([]);
@@ -56,12 +56,31 @@ const ModelTrainingComponent = ({ trainingData, onModelTrained }) => {
 
     setLoading(true);
     try {
-      const result = await MLAnalyticsAPI.trainFromFile(
-        selectedFile, 
-        targetColumn, 
-        selectedAlgorithm,
-        trainingOptions
-      );
+      let result;
+      
+      // Check if we have uploaded data that matches the selected file
+      const isUploadedData = uploadedData && selectedFile === uploadedDataName;
+      
+      if (isUploadedData) {
+        // Use uploaded data from parent component
+        result = await MLAnalyticsAPI.trainFromData(
+          uploadedData,
+          targetColumn,
+          selectedAlgorithm,
+          {
+            ...trainingOptions,
+            dataset_name: uploadedDataName || 'uploaded_dataset'
+          }
+        );
+      } else {
+        // Use training file from training_data folder
+        result = await MLAnalyticsAPI.trainFromFile(
+          selectedFile, 
+          targetColumn, 
+          selectedAlgorithm,
+          trainingOptions
+        );
+      }
       
       alert(`Model trained successfully! Accuracy: ${(result.accuracy * 100).toFixed(2)}%`);
       
