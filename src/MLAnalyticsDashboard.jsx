@@ -18,6 +18,22 @@ const MLAnalyticsDashboard = () => {
   const [backendStatus, setBackendStatus] = useState('checking');
   const [trainingData, setTrainingData] = useState([]);
   const [algorithms, setAlgorithms] = useState({});
+  
+  // Workflow states - 5 Step Interactive Data Analysis System
+  const [workflowStep, setWorkflowStep] = useState(1); // 1-5 for each step
+  const [cleanedData, setCleanedData] = useState(null);
+  const [trainedModel, setTrainedModel] = useState(null);
+  const [dataQualityReport, setDataQualityReport] = useState(null);
+  const [cleaningOptions, setCleaningOptions] = useState({
+    missingValues: 'fill_mean',
+    duplicates: 'remove',
+    outliers: 'keep'
+  });
+  
+  // Step-specific states
+  const [cleanedDataFile, setCleanedDataFile] = useState(null); // dataset_cleaned.csv
+  const [trainedModelFile, setTrainedModelFile] = useState(null); // model.pkl
+  const [trainingResultsFile, setTrainingResultsFile] = useState(null); // dataset_trained_results.csv
 
   // Check backend health on component mount
   useEffect(() => {
@@ -174,13 +190,235 @@ const MLAnalyticsDashboard = () => {
     }
   };
 
-  // Handle file upload
+  // Generate data quality report
+  const generateDataQualityReport = (rows, analysisResult) => {
+    const report = {
+      totalRows: rows.length,
+      totalColumns: columns.length,
+      missingValues: {},
+      duplicates: 0,
+      outliers: {},
+      dataTypes: analysisResult?.data_types || {}
+    };
+
+    // Count missing values per column
+    columns.forEach(col => {
+      const missing = rows.filter(row => 
+        row[col] === null || row[col] === undefined || row[col] === ''
+      ).length;
+      report.missingValues[col] = missing;
+    });
+
+    // Count duplicates (simple row comparison)
+    const seen = new Set();
+    report.duplicates = rows.filter(row => {
+      const key = JSON.stringify(row);
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return false;
+    }).length;
+
+    // Simple outlier detection for numeric columns
+    columns.forEach(col => {
+      const values = rows.map(row => row[col]).filter(val => 
+        typeof val === 'number' && !isNaN(val)
+      );
+      
+      if (values.length > 0) {
+        values.sort((a, b) => a - b);
+        const q1 = values[Math.floor(values.length * 0.25)];
+        const q3 = values[Math.floor(values.length * 0.75)];
+        const iqr = q3 - q1;
+        const lowerBound = q1 - 1.5 * iqr;
+        const upperBound = q3 + 1.5 * iqr;
+        
+        const outlierCount = values.filter(val => 
+          val < lowerBound || val > upperBound
+        ).length;
+        
+        if (outlierCount > 0) {
+          report.outliers[col] = outlierCount;
+        }
+      }
+    });
+
+    return report;
+  };
+
+  // Apply data cleaning based on user choices
+  const applyDataCleaning = async () => {
+    if (!data || !dataQualityReport) return;
+
+    setLoading(true);
+    try {
+      let cleaned = [...data];
+
+      // Handle missing values
+      if (cleaningOptions.missingValues === 'remove_rows') {
+        cleaned = cleaned.filter(row => 
+          !Object.values(row).some(val => 
+            val === null || val === undefined || val === ''
+          )
+        );
+      } else if (cleaningOptions.missingValues === 'fill_mean') {
+        // Calculate means for numeric columns
+        const means = {};
+        columns.forEach(col => {
+          const values = cleaned.map(row => row[col]).filter(val => 
+            typeof val === 'number' && !isNaN(val)
+          );
+          if (values.length > 0) {
+            means[col] = values.reduce((a, b) => a + b, 0) / values.length;
+          }
+        });
+
+        // Fill missing values
+        cleaned = cleaned.map(row => {
+          const newRow = {...row};
+          columns.forEach(col => {
+            if (newRow[col] === null || newRow[col] === undefined || newRow[col] === '') {
+              if (means[col] !== undefined) {
+                newRow[col] = means[col];
+              } else {
+                newRow[col] = 'Unknown';
+              }
+            }
+          });
+          return newRow;
+        });
+      } else if (cleaningOptions.missingValues === 'fill_mode') {
+        // Calculate modes for each column
+        const modes = {};
+        columns.forEach(col => {
+          const values = cleaned.map(row => row[col]).filter(val => 
+            val !== null && val !== undefined && val !== ''
+          );
+          if (values.length > 0) {
+            const counts = {};
+            values.forEach(val => counts[val] = (counts[val] || 0) + 1);
+            modes[col] = Object.keys(counts).reduce((a, b) => 
+              counts[a] > counts[b] ? a : b
+            );
+          }
+        });
+
+        // Fill missing values with mode
+        cleaned = cleaned.map(row => {
+          const newRow = {...row};
+          columns.forEach(col => {
+            if (newRow[col] === null || newRow[col] === undefined || newRow[col] === '') {
+              newRow[col] = modes[col] || 'Unknown';
+            }
+          });
+          return newRow;
+        });
+      }
+
+      // Handle duplicates
+      if (cleaningOptions.duplicates === 'remove') {
+        const seen = new Set();
+        cleaned = cleaned.filter(row => {
+          const key = JSON.stringify(row);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+
+      // Handle outliers
+      if (cleaningOptions.outliers === 'remove') {
+        const outlierBounds = {};
+        
+        // Calculate bounds for numeric columns
+        columns.forEach(col => {
+          const values = cleaned.map(row => row[col]).filter(val => 
+            typeof val === 'number' && !isNaN(val)
+          );
+          
+          if (values.length > 0) {
+            values.sort((a, b) => a - b);
+            const q1 = values[Math.floor(values.length * 0.25)];
+            const q3 = values[Math.floor(values.length * 0.75)];
+            const iqr = q3 - q1;
+            outlierBounds[col] = {
+              lower: q1 - 1.5 * iqr,
+              upper: q3 + 1.5 * iqr
+            };
+          }
+        });
+
+        // Remove rows with outliers
+        cleaned = cleaned.filter(row => {
+          return !columns.some(col => {
+            const val = row[col];
+            const bounds = outlierBounds[col];
+            return bounds && (val < bounds.lower || val > bounds.upper);
+          });
+        });
+      }
+
+      setCleanedData(cleaned);
+      
+      // Auto-generate and save cleaned dataset file
+      const cleanedFileName = `${fileName.replace('.csv', '')}_cleaned.csv`;
+      const csvContent = generateCSVContent(cleaned, columns);
+      setCleanedDataFile({
+        name: cleanedFileName,
+        content: csvContent,
+        data: cleaned
+      });
+
+      setWorkflowStep(4); // Move to modeling step
+      setActiveTab('modeling');
+      
+      alert(`Data cleaning completed! Dataset size: ${data.length} → ${cleaned.length} rows\nCleaned dataset saved as: ${cleanedFileName}`);
+      
+    } catch (error) {
+      console.error('Data cleaning failed:', error);
+      alert('Data cleaning failed: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Helper function to get current dataset (cleaned or original)
+  const getCurrentDataset = () => {
+    return cleanedData || data;
+  };
+
+  // Helper function to get current dataset name
+  const getCurrentDatasetName = () => {
+    if (cleanedData && cleanedDataFile) {
+      return cleanedDataFile.name;
+    }
+    return fileName;
+  };
+
+  // Generate CSV content from data
+  const generateCSVContent = (data, headers) => {
+    const csvRows = [headers.join(',')];
+    data.forEach(row => {
+      const values = headers.map(header => {
+        const value = row[header];
+        // Escape commas and quotes in values
+        if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+          return `"${value.replace(/"/g, '""')}"`;
+        }
+        return value;
+      });
+      csvRows.push(values.join(','));
+    });
+    return csvRows.join('\n');
+  };
+
+  // Handle file upload - Step 1: Data Upload
   const handleFileUpload = useCallback(async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
     setFileName(file.name);
     setLoading(true);
+    setWorkflowStep(1);
 
     try {
       const text = await file.text();
@@ -193,12 +431,19 @@ const MLAnalyticsDashboard = () => {
         return typeof firstValue === 'number';
       }));
 
-      // Analyze data with API
+      // Automatically proceed to Step 2: Analysis & Understanding
       if (backendStatus === 'connected') {
         try {
           const cleanedData = cleanDataForAPI(parsed.rows);
           const analysisResult = await analyzeDataWithAPI(cleanedData);
           setAnalysis(analysisResult);
+          
+          // Generate data quality report
+          const qualityReport = generateDataQualityReport(parsed.rows, analysisResult);
+          setDataQualityReport(qualityReport);
+          
+          setWorkflowStep(2);
+          setActiveTab('overview');
         } catch (analysisError) {
           console.warn('Analysis failed, but continuing with basic functionality:', analysisError);
           // Set basic analysis structure so the app doesn't break
@@ -209,17 +454,23 @@ const MLAnalyticsDashboard = () => {
             columns: parsed.headers,
             data_types: {}
           });
+          
+          // Generate basic quality report
+          const qualityReport = generateDataQualityReport(parsed.rows, {});
+          setDataQualityReport(qualityReport);
+          
+          setWorkflowStep(2);
+          setActiveTab('overview');
         }
       }
 
-      setActiveTab('overview');
     } catch (error) {
       console.error('Error processing file:', error);
       alert('Error processing file: ' + error.message);
     } finally {
       setLoading(false);
     }
-  }, [backendStatus]);
+  }, [backendStatus, columns]);
 
   // Run ML analysis using backend
   const runMLAnalysis = async () => {
@@ -413,11 +664,75 @@ const MLAnalyticsDashboard = () => {
         {/* Hero Section */}
         <div className="text-center mb-12">
           <div className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            <h2 className="text-4xl font-bold mb-4">Welcome to ML Analytics Platform</h2>
+            <h2 className="text-4xl font-bold mb-4">Step 1: Upload Your Dataset</h2>
           </div>
           <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Upload your dataset and let our advanced machine learning algorithms uncover hidden insights and patterns in your data.
+            Start your interactive data analysis journey by uploading a CSV dataset. Our system will automatically analyze and prepare your data through 5 comprehensive steps.
           </p>
+        </div>
+
+        {/* 5-Step Workflow Overview */}
+        <div className="mb-12 bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-8 border border-blue-200">
+          <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">Interactive Data Analysis Workflow</h3>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            {[
+              { 
+                step: 1, 
+                title: 'Upload Data', 
+                desc: 'Upload your CSV dataset', 
+                icon: '📤',
+                output: 'Raw dataset loaded'
+              },
+              { 
+                step: 2, 
+                title: 'Analyze & Understand', 
+                desc: 'Automatic EDA and data profiling', 
+                icon: '📊',
+                output: 'Quality report generated'
+              },
+              { 
+                step: 3, 
+                title: 'Clean & Prepare', 
+                desc: 'Interactive data cleaning', 
+                icon: '🛠️',
+                output: 'dataset_cleaned.csv'
+              },
+              { 
+                step: 4, 
+                title: 'Model & Train', 
+                desc: 'Machine learning modeling', 
+                icon: '🤖',
+                output: 'model.pkl + results.csv'
+              },
+              { 
+                step: 5, 
+                title: 'Predict', 
+                desc: 'Make predictions on new data', 
+                icon: '🔮',
+                output: 'Predictions ready'
+              }
+            ].map((step, index) => (
+              <div key={step.step} className={`text-center p-4 rounded-xl ${
+                workflowStep >= step.step ? 'bg-white border-2 border-green-300 shadow-md' : 'bg-gray-50 border border-gray-200'
+              }`}>
+                <div className="text-3xl mb-2">{step.icon}</div>
+                <h4 className={`font-semibold mb-2 ${
+                  workflowStep >= step.step ? 'text-green-700' : 'text-gray-600'
+                }`}>
+                  {step.title}
+                </h4>
+                <p className="text-sm text-gray-600 mb-2">{step.desc}</p>
+                <div className={`text-xs px-2 py-1 rounded ${
+                  workflowStep >= step.step ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {step.output}
+                </div>
+                {workflowStep >= step.step && (
+                  <CheckCircle className="w-5 h-5 text-green-600 mx-auto mt-2" />
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Backend Status Card */}
@@ -595,13 +910,82 @@ const MLAnalyticsDashboard = () => {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">Make Predictions</h2>
-          <p className="text-gray-600">Use trained models to make predictions on new data</p>
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">Step 5: Make Predictions</h2>
+          <p className="text-gray-600">Use your trained model to make predictions on new data using the cleaned dataset</p>
         </div>
         
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-          <PredictionComponent />
-        </div>
+        {trainedModel ? (
+          <div className="space-y-6">
+            {/* Model Info Card */}
+            <div className="bg-green-50 border border-green-200 rounded-xl p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <CheckCircle className="w-6 h-6 text-green-600" />
+                <h3 className="text-lg font-semibold text-green-900">Model Ready for Predictions</h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="font-medium text-green-800">Model ID:</span>
+                  <p className="text-green-700">{trainedModel.model_id}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-green-800">Accuracy:</span>
+                  <p className="text-green-700">{(trainedModel.accuracy * 100).toFixed(2)}%</p>
+                </div>
+                <div>
+                  <span className="font-medium text-green-800">Dataset Used:</span>
+                  <p className="text-green-700">{cleanedDataFile?.name || `${fileName}_cleaned`}</p>
+                </div>
+              </div>
+              
+              {trainingResultsFile && (
+                <div className="mt-4 pt-4 border-t border-green-200">
+                  <p className="text-green-800 mb-2">
+                    <strong>Training Results:</strong> Results with predictions saved as <code>{trainingResultsFile.name}</code>
+                  </p>
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([trainingResultsFile.content], { type: 'text/csv' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = trainingResultsFile.name;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download Training Results
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            {/* Prediction Component */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+              <PredictionComponent />
+            </div>
+          </div>
+        ) : (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-12 text-center">
+            <div className="text-6xl mb-6">🤖</div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">No Trained Model Available</h3>
+            <p className="text-gray-600 mb-6 max-w-md mx-auto">
+              You need to train a machine learning model first before making predictions. 
+              Go to the modeling step to train your model.
+            </p>
+            <button
+              onClick={() => {
+                setActiveTab('modeling');
+                setWorkflowStep(4);
+              }}
+              className="px-6 py-3 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2 mx-auto"
+            >
+              <Brain className="w-5 h-5" />
+              Go to Model Training
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -609,31 +993,69 @@ const MLAnalyticsDashboard = () => {
   const renderOverviewTab = () => (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
-        {/* Header Section */}
+        {/* Header */}
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">Dataset Overview</h2>
-          <p className="text-gray-600">Comprehensive analysis of your uploaded dataset</p>
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">Step 2: Data Analysis & Understanding</h2>
+          <p className="text-gray-600">Explore your dataset structure, statistics, and data quality to understand your data better</p>
         </div>
 
-        {/* Quick Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        {/* Workflow Progress */}
+        <div className="mb-8 bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Clock className="w-5 h-5 text-blue-600" />
+            Workflow Progress
+          </h3>
+          <div className="flex items-center justify-between">
+            {[
+              { step: 1, name: 'Upload', icon: Upload, completed: workflowStep >= 1, file: fileName },
+              { step: 2, name: 'Analysis', icon: FileText, completed: workflowStep >= 2, file: dataQualityReport ? 'quality_report.json' : null },
+              { step: 3, name: 'Cleaning', icon: Settings, completed: workflowStep >= 3, file: cleanedDataFile?.name },
+              { step: 4, name: 'Modeling', icon: Brain, completed: workflowStep >= 4, file: trainedModelFile?.name },
+              { step: 5, name: 'Prediction', icon: Target, completed: workflowStep >= 5, file: trainingResultsFile?.name }
+            ].map((item, index) => (
+              <div key={item.step} className="flex items-center">
+                <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                  item.completed ? 'bg-green-100 text-green-600' : 
+                  workflowStep === item.step ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'
+                }`}>
+                  {item.completed ? (
+                    <CheckCircle className="w-6 h-6" />
+                  ) : (
+                    <item.icon className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="ml-2">
+                  <span className={`text-sm font-medium ${
+                    item.completed ? 'text-green-600' : 
+                    workflowStep === item.step ? 'text-blue-600' : 'text-gray-400'
+                  }`}>
+                    {item.name}
+                  </span>
+                  {item.file && (
+                    <div className="text-xs text-gray-500 truncate max-w-20" title={item.file}>
+                      📄 {item.file}
+                    </div>
+                  )}
+                </div>
+                {index < 4 && (
+                  <div className={`mx-4 h-0.5 w-12 ${
+                    workflowStep > item.step ? 'bg-green-300' : 'bg-gray-200'
+                  }`}></div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Dataset Overview Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-6 text-white">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-blue-100 text-sm font-medium">Dataset File</p>
-                <p className="text-2xl font-bold truncate">{fileName || 'No file'}</p>
-              </div>
-              <FileText className="w-8 h-8 text-blue-200" />
-            </div>
-          </div>
-          
-          <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl p-6 text-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-green-100 text-sm font-medium">Total Rows</p>
+                <p className="text-blue-100 text-sm font-medium">Total Rows</p>
                 <p className="text-2xl font-bold">{data?.length?.toLocaleString() || 0}</p>
               </div>
-              <Database className="w-8 h-8 text-green-200" />
+              <FileText className="w-8 h-8 text-blue-200" />
             </div>
           </div>
           
@@ -644,6 +1066,21 @@ const MLAnalyticsDashboard = () => {
                 <p className="text-2xl font-bold">{columns.length}</p>
               </div>
               <BarChart3 className="w-8 h-8 text-purple-200" />
+            </div>
+          </div>
+          
+          <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl p-6 text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-green-100 text-sm font-medium">Data Quality</p>
+                <p className="text-lg font-bold">
+                  {dataQualityReport ? 
+                    `${((1 - (Object.values(dataQualityReport.missingValues || {}).reduce((a, b) => a + b, 0) + 
+                              dataQualityReport.duplicates) / (dataQualityReport.totalRows || 1)) * 100).toFixed(0)}%` 
+                    : 'N/A'}
+                </p>
+              </div>
+              <CheckCircle className="w-8 h-8 text-green-200" />
             </div>
           </div>
           
@@ -663,6 +1100,61 @@ const MLAnalyticsDashboard = () => {
             </div>
           </div>
         </div>
+
+        {/* Data Quality Summary */}
+        {dataQualityReport && (
+          <div className="mb-8 bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-yellow-600" />
+              Data Quality Summary
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className={`p-4 rounded-lg ${Object.values(dataQualityReport.missingValues || {}).reduce((a, b) => a + b, 0) > 0 ? 'bg-orange-50 border border-orange-200' : 'bg-green-50 border border-green-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-900">Missing Values</span>
+                  <span className={`font-bold ${Object.values(dataQualityReport.missingValues || {}).reduce((a, b) => a + b, 0) > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                    {Object.values(dataQualityReport.missingValues || {}).reduce((a, b) => a + b, 0)}
+                  </span>
+                </div>
+              </div>
+              <div className={`p-4 rounded-lg ${dataQualityReport.duplicates > 0 ? 'bg-orange-50 border border-orange-200' : 'bg-green-50 border border-green-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-900">Duplicate Rows</span>
+                  <span className={`font-bold ${dataQualityReport.duplicates > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                    {dataQualityReport.duplicates}
+                  </span>
+                </div>
+              </div>
+              <div className={`p-4 rounded-lg ${Object.keys(dataQualityReport.outliers || {}).length > 0 ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-900">Outliers Detected</span>
+                  <span className={`font-bold ${Object.keys(dataQualityReport.outliers || {}).length > 0 ? 'text-yellow-600' : 'text-green-600'}`}>
+                    {Object.keys(dataQualityReport.outliers || {}).length} columns
+                  </span>
+                </div>
+              </div>
+            </div>
+            {(Object.values(dataQualityReport.missingValues || {}).reduce((a, b) => a + b, 0) > 0 || 
+              dataQualityReport.duplicates > 0 || 
+              Object.keys(dataQualityReport.outliers || {}).length > 0) && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-blue-800 text-sm">
+                  <strong>Recommendation:</strong> Your data has quality issues that could affect model performance. 
+                  Consider proceeding to the data cleaning step to improve your dataset quality.
+                </p>
+                <button
+                  onClick={() => {
+                    setWorkflowStep(3);
+                    setActiveTab('cleaning');
+                  }}
+                  className="mt-3 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Go to Data Cleaning
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
@@ -785,6 +1277,18 @@ const MLAnalyticsDashboard = () => {
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-4 justify-center">
           <button
+            onClick={() => {
+              setWorkflowStep(3);
+              setActiveTab('cleaning');
+            }}
+            disabled={!dataQualityReport}
+            className="flex items-center px-8 py-4 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-semibold rounded-xl hover:shadow-lg transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+          >
+            <Settings className="w-5 h-5 mr-3" />
+            Proceed to Data Cleaning
+          </button>
+          
+          <button
             onClick={runMLAnalysis}
             disabled={loading || selectedColumns.length === 0 || backendStatus !== 'connected'}
             className="flex items-center px-8 py-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-semibold rounded-xl hover:shadow-lg transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
@@ -797,7 +1301,7 @@ const MLAnalyticsDashboard = () => {
             ) : (
               <>
                 <Play className="w-5 h-5 mr-3" />
-                Start ML Analysis
+                Quick ML Analysis
               </>
             )}
           </button>
@@ -1736,6 +2240,462 @@ const MLAnalyticsDashboard = () => {
     </div>
   );
 
+  // Step 3: Data Cleaning Tab
+  const renderCleaningTab = () => (
+    <div className="p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">Step 3: Data Preparation & Cleaning</h2>
+          <p className="text-gray-600">Review data quality issues and apply cleaning operations to improve your dataset</p>
+        </div>
+
+        {dataQualityReport ? (
+          <div className="space-y-8">
+            {/* Data Quality Report */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Database className="w-5 h-5 text-blue-600" />
+                Data Quality Report
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-blue-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-blue-600">{dataQualityReport.totalRows.toLocaleString()}</div>
+                  <div className="text-sm text-gray-600">Total Rows</div>
+                </div>
+                <div className="bg-green-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-green-600">{dataQualityReport.totalColumns}</div>
+                  <div className="text-sm text-gray-600">Total Columns</div>
+                </div>
+                <div className="bg-orange-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-orange-600">
+                    {Object.values(dataQualityReport.missingValues || {}).reduce((a, b) => a + b, 0)}
+                  </div>
+                  <div className="text-sm text-gray-600">Missing Values</div>
+                </div>
+                <div className="bg-red-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-red-600">{dataQualityReport.duplicates}</div>
+                  <div className="text-sm text-gray-600">Duplicate Rows</div>
+                </div>
+              </div>
+
+              {/* Missing Values Details */}
+              {Object.keys(dataQualityReport.missingValues || {}).some(col => 
+                dataQualityReport.missingValues[col] > 0
+              ) && (
+                <div className="mb-6">
+                  <h4 className="font-medium text-gray-900 mb-3">Missing Values by Column</h4>
+                  <div className="space-y-2">
+                    {Object.entries(dataQualityReport.missingValues || {})
+                      .filter(([col, count]) => count > 0)
+                      .map(([col, count]) => (
+                        <div key={col} className="flex items-center justify-between bg-orange-50 rounded-lg p-3">
+                          <span className="font-medium text-gray-900">{col}</span>
+                          <span className="text-orange-600 font-semibold">
+                            {count} missing ({((count / dataQualityReport.totalRows) * 100).toFixed(1)}%)
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Outliers Details */}
+              {Object.keys(dataQualityReport.outliers || {}).length > 0 && (
+                <div className="mb-6">
+                  <h4 className="font-medium text-gray-900 mb-3">Outliers Detected</h4>
+                  <div className="space-y-2">
+                    {Object.entries(dataQualityReport.outliers || {}).map(([col, count]) => (
+                      <div key={col} className="flex items-center justify-between bg-yellow-50 rounded-lg p-3">
+                        <span className="font-medium text-gray-900">{col}</span>
+                        <span className="text-yellow-600 font-semibold">
+                          {count} outliers ({((count / dataQualityReport.totalRows) * 100).toFixed(1)}%)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Cleaning Options */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Settings className="w-5 h-5 text-purple-600" />
+                Data Cleaning Options
+              </h3>
+
+              <div className="space-y-6">
+                {/* Missing Values Strategy */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-3">
+                    Missing Values Strategy
+                  </label>
+                  <div className="space-y-2">
+                    {[
+                      { value: 'keep', label: 'Keep as is', desc: 'No changes to missing values' },
+                      { value: 'remove_rows', label: 'Remove rows', desc: 'Delete rows containing missing values' },
+                      { value: 'fill_mean', label: 'Fill with mean/mode', desc: 'Fill numeric columns with mean, categorical with mode' },
+                      { value: 'fill_zero', label: 'Fill with zero/unknown', desc: 'Fill missing values with 0 or "Unknown"' }
+                    ].map(option => (
+                      <label key={option.value} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="missingValues"
+                          value={option.value}
+                          checked={cleaningOptions.missingValues === option.value}
+                          onChange={(e) => setCleaningOptions(prev => ({
+                            ...prev,
+                            missingValues: e.target.value
+                          }))}
+                          className="mt-1"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900">{option.label}</div>
+                          <div className="text-sm text-gray-600">{option.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Duplicates Strategy */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-3">
+                    Duplicate Rows Strategy
+                  </label>
+                  <div className="space-y-2">
+                    {[
+                      { value: 'keep', label: 'Keep duplicates', desc: 'No changes to duplicate rows' },
+                      { value: 'remove', label: 'Remove duplicates', desc: 'Keep only unique rows' }
+                    ].map(option => (
+                      <label key={option.value} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="duplicates"
+                          value={option.value}
+                          checked={cleaningOptions.duplicates === option.value}
+                          onChange={(e) => setCleaningOptions(prev => ({
+                            ...prev,
+                            duplicates: e.target.value
+                          }))}
+                          className="mt-1"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900">{option.label}</div>
+                          <div className="text-sm text-gray-600">{option.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Outliers Strategy */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-3">
+                    Outliers Strategy
+                  </label>
+                  <div className="space-y-2">
+                    {[
+                      { value: 'keep', label: 'Keep outliers', desc: 'No changes to outlier values' },
+                      { value: 'remove', label: 'Remove outliers', desc: 'Remove rows containing outlier values' },
+                      { value: 'cap', label: 'Cap outliers', desc: 'Limit outliers to 95th percentile values' }
+                    ].map(option => (
+                      <label key={option.value} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="outliers"
+                          value={option.value}
+                          checked={cleaningOptions.outliers === option.value}
+                          onChange={(e) => setCleaningOptions(prev => ({
+                            ...prev,
+                            outliers: e.target.value
+                          }))}
+                          className="mt-1"
+                        />
+                        <div>
+                          <div className="font-medium text-gray-900">{option.label}</div>
+                          <div className="text-sm text-gray-600">{option.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-4 pt-4 border-t">
+                  <button
+                    onClick={applyDataCleaning}
+                    disabled={loading}
+                    className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-semibold rounded-lg hover:from-purple-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <Clock className="w-5 h-5 animate-spin" />
+                        Cleaning Data...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-5 h-5" />
+                        Apply Cleaning
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setWorkflowStep(4)}
+                    disabled={!cleanedData}
+                    className="px-6 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Skip Cleaning
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Cleaning Results */}
+            {cleanedData && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <CheckCircle className="w-6 h-6 text-green-600" />
+                  <h3 className="text-lg font-semibold text-green-900">Data Cleaning Completed</h3>
+                </div>
+                <p className="text-green-800 mb-4">
+                  Your dataset has been successfully cleaned. Dataset size: {data?.length || 0} → {cleanedData.length} rows
+                </p>
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => {
+                      setWorkflowStep(4);
+                      setActiveTab('modeling');
+                    }}
+                    className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+                  >
+                    <Brain className="w-5 h-5" />
+                    Proceed to Modeling
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (cleanedDataFile) {
+                        const blob = new Blob([cleanedDataFile.content], { type: 'text/csv' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = cleanedDataFile.name;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      } else {
+                        // Fallback: generate CSV content on the fly
+                        const csvContent = generateCSVContent(cleanedData, columns);
+                        const blob = new Blob([csvContent], { type: 'text/csv' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${fileName.replace('.csv', '')}_cleaned.csv`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }
+                    }}
+                    className="px-6 py-3 border border-green-600 text-green-600 font-semibold rounded-lg hover:bg-green-50 transition-colors flex items-center gap-2"
+                  >
+                    <Download className="w-5 h-5" />
+                    Download Cleaned CSV
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-gray-50 rounded-xl border border-gray-200 p-12 text-center">
+            <div className="text-6xl mb-6">🛠️</div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">No Data Quality Report</h3>
+            <p className="text-gray-600 mb-6 max-w-md mx-auto">
+              Upload and analyze your data first to see data quality issues and cleaning recommendations.
+            </p>
+            <button
+              onClick={() => setActiveTab('upload')}
+              className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Upload Data
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // Step 4: ML Modeling Tab
+  const renderModelingTab = () => (
+    <div className="p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">Step 4: Machine Learning Modeling</h2>
+          <p className="text-gray-600">Train ML models on your cleaned dataset to discover patterns and build predictive models</p>
+        </div>
+
+        {(cleanedData || data) ? (
+          <div className="space-y-8">
+            {/* Dataset Info */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Database className="w-5 h-5 text-green-600" />
+                Dataset Ready for Modeling
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-green-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-green-600">
+                    {(cleanedData || data)?.length.toLocaleString()}
+                  </div>
+                  <div className="text-sm text-gray-600">Training Samples</div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-blue-600">{columns.length}</div>
+                  <div className="text-sm text-gray-600">Features Available</div>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-purple-600">
+                    {cleanedData ? 'Cleaned' : 'Original'}
+                  </div>
+                  <div className="text-sm text-gray-600">Dataset Type</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Model Training Component */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <ModelTrainingComponent
+                trainingData={[
+                  {
+                    filename: cleanedData ? `${fileName}_cleaned` : fileName,
+                    shape: [(cleanedData || data).length, columns.length],
+                    columns: columns
+                  }
+                ]}
+                onModelTrained={(result) => {
+                  setTrainedModel(result);
+                  
+                  // Save model and training results files
+                  const modelFileName = `${fileName.replace('.csv', '')}_model.pkl`;
+                  const trainingResultsFileName = `${fileName.replace('.csv', '')}_training_results.csv`;
+                  
+                  setTrainedModelFile({
+                    name: modelFileName,
+                    modelId: result.model_id,
+                    accuracy: result.accuracy,
+                    created_at: new Date().toISOString()
+                  });
+                  
+                  // Generate training results CSV with predictions if available
+                  if (result.predictions && (cleanedData || data)) {
+                    const trainingDataWithPredictions = (cleanedData || data).map((row, index) => ({
+                      ...row,
+                      predicted_label: result.predictions[index] || null
+                    }));
+                    
+                    const trainingResultsContent = generateCSVContent(
+                      trainingDataWithPredictions, 
+                      [...columns, 'predicted_label']
+                    );
+                    
+                    setTrainingResultsFile({
+                      name: trainingResultsFileName,
+                      content: trainingResultsContent,
+                      data: trainingDataWithPredictions
+                    });
+                  }
+                  
+                  setWorkflowStep(5);
+                  alert(`Model trained successfully!\nModel saved as: ${modelFileName}\nAccuracy: ${(result.accuracy * 100).toFixed(2)}%\nYou can now make predictions.`);
+                }}
+              />
+            </div>
+
+            {/* Quick Analysis Options */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Clustering */}
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-yellow-600" />
+                  Clustering Analysis
+                </h3>
+                <p className="text-gray-600 mb-4">
+                  Discover hidden groups and patterns in your data using unsupervised learning.
+                </p>
+                <button
+                  onClick={() => {
+                    runMLAnalysis();
+                    setActiveTab('visualization');
+                  }}
+                  className="w-full px-4 py-2 bg-yellow-100 text-yellow-800 rounded-lg hover:bg-yellow-200 transition-colors"
+                >
+                  Run Clustering
+                </button>
+              </div>
+
+              {/* Anomaly Detection */}
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-red-600" />
+                  Anomaly Detection
+                </h3>
+                <p className="text-gray-600 mb-4">
+                  Identify unusual patterns and outliers that might indicate data quality issues or interesting insights.
+                </p>
+                <button
+                  onClick={() => {
+                    runMLAnalysis();
+                    setActiveTab('visualization');
+                  }}
+                  className="w-full px-4 py-2 bg-red-100 text-red-800 rounded-lg hover:bg-red-200 transition-colors"
+                >
+                  Detect Anomalies
+                </button>
+              </div>
+            </div>
+
+            {/* Progress to Next Step */}
+            {trainedModel && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <CheckCircle className="w-6 h-6 text-green-600" />
+                  <h3 className="text-lg font-semibold text-green-900">Model Training Completed</h3>
+                </div>
+                <p className="text-green-800 mb-4">
+                  Your machine learning model has been successfully trained and is ready for making predictions.
+                </p>
+                <button
+                  onClick={() => {
+                    setWorkflowStep(5);
+                    setActiveTab('prediction');
+                  }}
+                  className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+                >
+                  <Target className="w-5 h-5" />
+                  Start Making Predictions
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-gray-50 rounded-xl border border-gray-200 p-12 text-center">
+            <div className="text-6xl mb-6">🤖</div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">No Dataset Available</h3>
+            <p className="text-gray-600 mb-6 max-w-md mx-auto">
+              Please upload and clean your data first before proceeding with machine learning modeling.
+            </p>
+            <button
+              onClick={() => setActiveTab('cleaning')}
+              className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Go to Data Cleaning
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50">
       {/* Header */}
@@ -1782,32 +2742,84 @@ const MLAnalyticsDashboard = () => {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
-          {/* Navigation Tabs */}
+          {/* Navigation Tabs - 5-Step Workflow */}
           <div className="border-b border-gray-200 bg-gray-50">
             <nav className="flex overflow-x-auto">
               {[
-                { id: 'upload', name: 'Upload Data', icon: Upload, color: 'blue' },
-                { id: 'training', name: 'Train Models', icon: Brain, color: 'purple' },
-                { id: 'prediction', name: 'Predictions', icon: Target, color: 'green' },
-                { id: 'overview', name: 'Overview', icon: FileText, color: 'indigo' },
-                { id: 'visualization', name: 'Visualization', icon: BarChart3, color: 'pink' },
-                { id: 'clustering', name: 'Clustering', icon: Layers, color: 'yellow' },
-                { id: 'anomaly', name: 'Anomaly Detection', icon: AlertTriangle, color: 'red' },
-                { id: 'decision-tree', name: 'Decision Tree', icon: TreePine, color: 'emerald' },
+                { 
+                  id: 'upload', 
+                  name: 'Step 1: Upload Data', 
+                  icon: Upload, 
+                  color: 'blue',
+                  step: 1,
+                  enabled: true 
+                },
+                { 
+                  id: 'overview', 
+                  name: 'Step 2: Data Analysis', 
+                  icon: FileText, 
+                  color: 'indigo',
+                  step: 2,
+                  enabled: workflowStep >= 2 
+                },
+                { 
+                  id: 'cleaning', 
+                  name: 'Step 3: Data Cleaning', 
+                  icon: Settings, 
+                  color: 'yellow',
+                  step: 3,
+                  enabled: workflowStep >= 2 && dataQualityReport 
+                },
+                { 
+                  id: 'modeling', 
+                  name: 'Step 4: ML Modeling', 
+                  icon: Brain, 
+                  color: 'purple',
+                  step: 4,
+                  enabled: workflowStep >= 4 
+                },
+                { 
+                  id: 'prediction', 
+                  name: 'Step 5: Predictions', 
+                  icon: Target, 
+                  color: 'green',
+                  step: 5,
+                  enabled: workflowStep >= 5 
+                },
+                // Additional tabs for detailed analysis
+                { 
+                  id: 'visualization', 
+                  name: 'Visualization', 
+                  icon: BarChart3, 
+                  color: 'pink',
+                  step: null,
+                  enabled: workflowStep >= 2 
+                },
               ].map(tab => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => tab.enabled && setActiveTab(tab.id)}
+                  disabled={!tab.enabled}
                   className={`group relative px-6 py-4 font-medium text-sm whitespace-nowrap flex items-center transition-all duration-300 ${
                     activeTab === tab.id
                       ? `text-${tab.color}-600 bg-white border-b-2 border-${tab.color}-500 shadow-sm`
-                      : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'
+                      : tab.enabled 
+                        ? 'text-gray-700 hover:text-gray-900 hover:bg-white/50 cursor-pointer'
+                        : 'text-gray-400 cursor-not-allowed opacity-50'
                   }`}
                 >
                   <tab.icon className={`w-4 h-4 mr-2 transition-transform duration-300 ${
-                    activeTab === tab.id ? 'scale-110' : 'group-hover:scale-105'
+                    activeTab === tab.id ? 'scale-110' : tab.enabled ? 'group-hover:scale-105' : ''
                   }`} />
-                  {tab.name}
+                  <span className="flex items-center gap-2">
+                    {tab.name}
+                    {tab.step && workflowStep >= tab.step && (
+                      <CheckCircle className="w-4 h-4 text-green-500" />
+                    )}
+                    {tab.step && workflowStep === tab.step && (
+                      <Clock className="w-4 h-4 text-blue-500 animate-pulse" />
+                    )}
+                  </span>
                   {activeTab === tab.id && (
                     <div className={`absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-${tab.color}-500 to-${tab.color}-600`}></div>
                   )}
@@ -1829,13 +2841,11 @@ const MLAnalyticsDashboard = () => {
               {/* Content with fade transition */}
               <div className="relative z-10">
                 {activeTab === 'upload' && renderUploadTab()}
-                {activeTab === 'training' && renderTrainingTab()}
-                {activeTab === 'prediction' && renderPredictionTab()}
                 {activeTab === 'overview' && renderOverviewTab()}
+                {activeTab === 'cleaning' && renderCleaningTab()}
+                {activeTab === 'modeling' && renderModelingTab()}
+                {activeTab === 'prediction' && renderPredictionTab()}
                 {activeTab === 'visualization' && renderVisualizationTab()}
-                {activeTab === 'clustering' && renderClusteringTab()}
-                {activeTab === 'anomaly' && renderAnomalyTab()}
-                {activeTab === 'decision-tree' && renderDecisionTreeTab()}
               </div>
             </div>
           </div>
