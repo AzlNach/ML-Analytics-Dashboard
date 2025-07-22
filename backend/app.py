@@ -401,10 +401,12 @@ def get_model_history():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Enhanced health check endpoint"""
+    print("Loading training data...")
     training_data = load_training_data()
+    print(f"Training data loaded: {len(training_data)} files")
     algorithms = get_model_algorithms()
     
-    return safe_json_response({
+    response_data = {
         'status': 'healthy',
         'message': 'ML Analytics API is running',
         'version': '2.0.0',
@@ -413,7 +415,10 @@ def health_check():
         'available_algorithms': algorithms,
         'trained_models_count': len(trained_models),
         'model_history_count': len(model_history)
-    })
+    }
+    print(f"Response training_data length: {len(response_data['training_data'])}")
+    
+    return safe_json_response(response_data)
 
 def clean_dataframe(df):
     """Clean DataFrame by handling NaN values and converting types properly"""
