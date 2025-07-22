@@ -131,6 +131,25 @@ def make_hashable_key(value):
         # Value is already hashable or None
         return value
 
+def convert_numpy_types(obj):
+    """Convert numpy types to native Python types recursively"""
+    if isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif pd.isna(obj):
+        return None
+    else:
+        return obj
+
 def safe_json_response(data):
     """Create a safe JSON response handling numpy types"""
     return app.response_class(
@@ -1165,6 +1184,151 @@ def train_from_data():
             'predictions': convert_numpy_types(y_pred_all.tolist()),
             'created_at': datetime.now().isoformat()
         })
+        
+    except Exception as e:
+        print(f"Training from data error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Training failed: {str(e)}'}), 500
+
+@app.route('/api/train-from-data', methods=['POST'])
+def train_from_data():
+    """Train model using data sent from frontend"""
+    try:
+        data = request.json
+        
+        if not data or 'csv_data' not in data:
+            return jsonify({'error': 'No CSV data provided'}), 400
+        
+        csv_data = data['csv_data']
+        target_column = data.get('target_column')
+        model_type = data.get('model_type', 'decision_tree')
+        test_size = data.get('test_size', 0.2)
+        cross_validation = data.get('cross_validation', True)
+        
+        if not target_column:
+            return jsonify({'error': 'Target column not provided'}), 400
+        
+        # Clean data and create DataFrame
+        cleaned_csv_data = []
+        for i, row in enumerate(csv_data):
+            cleaned_row = {}
+            for key, value in row.items():
+                cleaned_row[key] = clean_complex_types(value, i, key)
+            cleaned_csv_data.append(cleaned_row)
+        
+        df = pd.DataFrame(cleaned_csv_data)
+        df = clean_dataframe(df)
+        
+        if target_column not in df.columns:
+            return jsonify({'error': f'Target column "{target_column}" not found in data'}), 400
+        
+        # Prepare features (exclude target column)
+        all_columns = list(df.columns)
+        all_columns.remove(target_column)
+        
+        # Select only numeric columns for features
+        feature_columns = []
+        for col in all_columns:
+            if df[col].dtype in ['int64', 'float64', 'Int64', 'Float64']:
+                feature_columns.append(col)
+        
+        if not feature_columns:
+            return jsonify({'error': 'No numeric features found for training'}), 400
+        
+        X = preprocess_data(df[feature_columns])
+        y = df[target_column]
+        
+        # Encode target if categorical
+        label_encoder = None
+        original_classes = None
+        if y.dtype == 'object':
+            label_encoder = LabelEncoder()
+            original_classes = y.unique().tolist()
+            y = label_encoder.fit_transform(y)
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y
+        )
+        
+        # Create and train model
+        model = create_model_by_type(model_type)
+        model.fit(X_train, y_train)
+        
+        # Evaluate model
+        performance = evaluate_model_performance(model, X_test, y_test, model_type)
+        
+        # Generate predictions for the entire dataset
+        y_pred_full = model.predict(X)
+        
+        # Save model
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        dataset_name = data.get('dataset_name', 'unknown')
+        model_id = f"{model_type}_{dataset_name}_{timestamp}"
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.pkl")
+        
+        # Prepare model data for saving
+        model_data = {
+            'model': model,
+            'scaler': scaler if 'scaler' in locals() else None,
+            'label_encoder': label_encoder,
+            'feature_columns': feature_columns,
+            'target_column': target_column,
+            'model_type': model_type,
+            'performance': performance,
+            'original_classes': original_classes,
+            'created_at': datetime.now().isoformat()
+        }
+        
+        joblib.dump(model_data, model_path)
+        
+        # Store in global registry
+        trained_models[model_id] = {
+            'model_id': model_id,
+            'model_type': model_type,
+            'features': feature_columns,
+            'target_column': target_column,
+            'performance': performance,
+            'created_at': datetime.now().isoformat(),
+            'training_file': dataset_name,
+            'accuracy': performance.get('accuracy', 0)
+        }
+        
+        # Add to model history
+        model_history.append({
+            'model_id': model_id,
+            'model_type': model_type,
+            'training_file': dataset_name,
+            'accuracy': performance.get('accuracy', 0),
+            'cv_mean_score': performance.get('cv_mean_score'),
+            'cv_std_score': performance.get('cv_std_score'),
+            'created_at': datetime.now().isoformat()
+        })
+        
+        # Cross-validation if requested
+        cv_scores = None
+        if cross_validation and len(X_train) > 10:  # Only if we have enough data
+            try:
+                cv_scores = cross_val_score(model, X_train, y_train, cv=min(5, len(X_train)//2))
+                performance['cv_mean_score'] = float(cv_scores.mean())
+                performance['cv_std_score'] = float(cv_scores.std())
+            except Exception as cv_error:
+                print(f"Cross-validation failed: {cv_error}")
+        
+        result = {
+            'model_id': model_id,
+            'accuracy': performance.get('accuracy', 0),
+            'performance': convert_numpy_types(performance),
+            'predictions': convert_numpy_types(y_pred_full.tolist()),
+            'feature_columns': feature_columns,
+            'target_column': target_column,
+            'model_type': model_type,
+            'training_samples': len(X_train),
+            'test_samples': len(X_test)
+        }
+        
+        return safe_json_response(result)
         
     except Exception as e:
         print(f"Training from data error: {e}")
