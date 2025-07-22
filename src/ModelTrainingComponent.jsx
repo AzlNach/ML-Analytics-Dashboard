@@ -6,6 +6,7 @@ const ModelTrainingComponent = ({ trainingData, onModelTrained, uploadedData, up
   const [algorithms, setAlgorithms] = useState({});
   const [trainedModels, setTrainedModels] = useState([]);
   const [modelHistory, setModelHistory] = useState([]);
+  const [backendTrainingData, setBackendTrainingData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState('');
   const [selectedAlgorithm, setSelectedAlgorithm] = useState('decision_tree');
@@ -19,6 +20,7 @@ const ModelTrainingComponent = ({ trainingData, onModelTrained, uploadedData, up
     loadAlgorithms();
     loadTrainedModels();
     loadModelHistory();
+    loadBackendTrainingData();
   }, []);
 
   const loadAlgorithms = async () => {
@@ -45,6 +47,15 @@ const ModelTrainingComponent = ({ trainingData, onModelTrained, uploadedData, up
       setModelHistory(response.history || []);
     } catch (error) {
       console.error('Failed to load model history:', error);
+    }
+  };
+
+  const loadBackendTrainingData = async () => {
+    try {
+      const response = await MLAnalyticsAPI.getTrainingData();
+      setBackendTrainingData(response || []);
+    } catch (error) {
+      console.error('Failed to load backend training data:', error);
     }
   };
 
@@ -113,7 +124,14 @@ const ModelTrainingComponent = ({ trainingData, onModelTrained, uploadedData, up
   };
 
   const getSelectedFileColumns = () => {
-    const file = trainingData.find(f => f.filename === selectedFile);
+    // Check if it's uploaded data first
+    if (uploadedData && selectedFile === uploadedDataName) {
+      const file = trainingData.find(f => f.filename === selectedFile);
+      return file ? file.columns : [];
+    }
+    
+    // Check backend training data
+    const file = backendTrainingData.find(f => f.filename === selectedFile);
     return file ? file.columns : [];
   };
 
@@ -149,9 +167,18 @@ const ModelTrainingComponent = ({ trainingData, onModelTrained, uploadedData, up
               className="w-full px-3 py-2 border rounded-lg"
             >
               <option value="">Select a dataset...</option>
-              {trainingData.map((file, index) => (
-                <option key={index} value={file.filename}>
-                  {file.filename} ({file.shape[0]} rows × {file.shape[1]} cols)
+              
+              {/* Uploaded Data */}
+              {uploadedData && uploadedDataName && trainingData.map((file, index) => (
+                <option key={`uploaded-${index}`} value={file.filename}>
+                  📁 {file.filename} ({file.shape[0]} rows × {file.shape[1]} cols) - Uploaded
+                </option>
+              ))}
+              
+              {/* Backend Training Data */}
+              {backendTrainingData.map((file, index) => (
+                <option key={`backend-${index}`} value={file.filename}>
+                  💾 {file.filename} ({file.shape[0]} rows × {file.shape[1]} cols) - Training Data
                 </option>
               ))}
             </select>

@@ -168,15 +168,40 @@ model_history = []
 
 # Ensure models directory exists
 MODELS_DIR = 'models'
-TRAINING_DATA_DIR = '../training_data'
+# Use absolute path to training_data directory - check both possible locations
+current_dir = os.getcwd()
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+
+# First try: training_data relative to current working directory (when run from project root)
+training_data_option1 = os.path.join(current_dir, 'training_data')
+# Second try: training_data relative to backend parent directory (when run from backend)
+training_data_option2 = os.path.join(os.path.dirname(backend_dir), 'training_data')
+
+if os.path.exists(training_data_option1):
+    TRAINING_DATA_DIR = training_data_option1
+elif os.path.exists(training_data_option2):
+    TRAINING_DATA_DIR = training_data_option2
+else:
+    # Fallback to relative path
+    TRAINING_DATA_DIR = 'training_data'
+
+print(f"Using TRAINING_DATA_DIR: {TRAINING_DATA_DIR}")
+print(f"TRAINING_DATA_DIR exists: {os.path.exists(TRAINING_DATA_DIR)}")
+
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 def load_training_data():
     """Load and prepare training data for better ML models"""
+    print(f"Loading training data from: {TRAINING_DATA_DIR}")
+    print(f"Directory exists: {os.path.exists(TRAINING_DATA_DIR)}")
+    
     training_files = []
     
     if os.path.exists(TRAINING_DATA_DIR):
-        for file in os.listdir(TRAINING_DATA_DIR):
+        files_in_dir = os.listdir(TRAINING_DATA_DIR)
+        print(f"Files in directory: {files_in_dir}")
+        
+        for file in files_in_dir:
             if file.endswith('.csv'):
                 try:
                     df = pd.read_csv(os.path.join(TRAINING_DATA_DIR, file))
@@ -188,10 +213,14 @@ def load_training_data():
                         'missing_values': df.isnull().sum().to_dict(),
                         'file_size_mb': round(os.path.getsize(os.path.join(TRAINING_DATA_DIR, file)) / 1024 / 1024, 2)
                     })
+                    print(f"Successfully loaded: {file}")
                 except Exception as e:
                     print(f"Error loading {file}: {str(e)}")
                     continue
+    else:
+        print(f"Training data directory does not exist: {TRAINING_DATA_DIR}")
     
+    print(f"Total training files loaded: {len(training_files)}")
     return training_files
 
 def get_model_algorithms():
