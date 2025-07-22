@@ -190,59 +190,69 @@ const MLAnalyticsDashboard = () => {
     }
   };
 
-  // Generate data quality report
-  const generateDataQualityReport = (rows, analysisResult) => {
-    const report = {
-      totalRows: rows.length,
-      totalColumns: columns.length,
-      missingValues: {},
-      duplicates: 0,
-      outliers: {},
-      dataTypes: analysisResult?.data_types || {}
-    };
-
-    // Count missing values per column
-    columns.forEach(col => {
-      const missing = rows.filter(row => 
-        row[col] === null || row[col] === undefined || row[col] === ''
-      ).length;
-      report.missingValues[col] = missing;
-    });
-
-    // Count duplicates (simple row comparison)
-    const seen = new Set();
-    report.duplicates = rows.filter(row => {
-      const key = JSON.stringify(row);
-      if (seen.has(key)) return true;
-      seen.add(key);
-      return false;
-    }).length;
-
-    // Simple outlier detection for numeric columns
-    columns.forEach(col => {
-      const values = rows.map(row => row[col]).filter(val => 
-        typeof val === 'number' && !isNaN(val)
-      );
+  // Generate data quality report using backend
+  const generateDataQualityReport = async (rows, analysisResult) => {
+    try {
+      // Use backend API for data quality report
+      const cleanedData = cleanDataForAPI(rows);
+      const qualityReport = await MLAnalyticsAPI.generateDataQualityReport(cleanedData);
+      return qualityReport;
+    } catch (error) {
+      console.error('Backend quality report failed, using fallback:', error);
       
-      if (values.length > 0) {
-        values.sort((a, b) => a - b);
-        const q1 = values[Math.floor(values.length * 0.25)];
-        const q3 = values[Math.floor(values.length * 0.75)];
-        const iqr = q3 - q1;
-        const lowerBound = q1 - 1.5 * iqr;
-        const upperBound = q3 + 1.5 * iqr;
-        
-        const outlierCount = values.filter(val => 
-          val < lowerBound || val > upperBound
-        ).length;
-        
-        if (outlierCount > 0) {
-          report.outliers[col] = outlierCount;
-        }
-      }
-    });
+      // Fallback to frontend calculation if backend fails
+      const report = {
+        totalRows: rows.length,
+        totalColumns: columns.length,
+        missingValues: {},
+        duplicates: 0,
+        outliers: {},
+        dataTypes: analysisResult?.data_types || {}
+      };
 
-    return report;
+      // Count missing values per column
+      columns.forEach(col => {
+        const missing = rows.filter(row => 
+          row[col] === null || row[col] === undefined || row[col] === ''
+        ).length;
+        report.missingValues[col] = missing;
+      });
+
+      // Count duplicates (simple row comparison)
+      const seen = new Set();
+      report.duplicates = rows.filter(row => {
+        const key = JSON.stringify(row);
+        if (seen.has(key)) return true;
+        seen.add(key);
+        return false;
+      }).length;
+
+      // Simple outlier detection for numeric columns
+      columns.forEach(col => {
+        const values = rows.map(row => row[col]).filter(val => 
+          typeof val === 'number' && !isNaN(val)
+        );
+        
+        if (values.length > 0) {
+          values.sort((a, b) => a - b);
+          const q1 = values[Math.floor(values.length * 0.25)];
+          const q3 = values[Math.floor(values.length * 0.75)];
+          const iqr = q3 - q1;
+          const lowerBound = q1 - 1.5 * iqr;
+          const upperBound = q3 + 1.5 * iqr;
+          
+          const outlierCount = values.filter(val => 
+            val < lowerBound || val > upperBound
+          ).length;
+          
+          if (outlierCount > 0) {
+            report.outliers[col] = outlierCount;
+          }
+        }
+      });
+
+      return report;
+    }
   };
 
   // Apply data cleaning based on user choices
