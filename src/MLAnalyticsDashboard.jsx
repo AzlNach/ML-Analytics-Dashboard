@@ -347,7 +347,7 @@ const MLAnalyticsDashboard = () => {
           setAnalysis(analysisResult);
           
           // Generate data quality report
-          const qualityReport = generateDataQualityReport(parsed.rows, analysisResult);
+          const qualityReport = await generateDataQualityReport(parsed.rows, analysisResult);
           setDataQualityReport(qualityReport);
           
           setWorkflowStep(2);
@@ -364,7 +364,7 @@ const MLAnalyticsDashboard = () => {
           });
           
           // Generate basic quality report
-          const qualityReport = generateDataQualityReport(parsed.rows, {});
+          const qualityReport = await generateDataQualityReport(parsed.rows, {});
           setDataQualityReport(qualityReport);
           
           setWorkflowStep(2);
