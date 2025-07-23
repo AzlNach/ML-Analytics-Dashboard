@@ -35,6 +35,130 @@ const MLAnalyticsDashboard = () => {
   const [trainedModelFile, setTrainedModelFile] = useState(null); // model.pkl
   const [trainingResultsFile, setTrainingResultsFile] = useState(null); // dataset_trained_results.csv
 
+  // Visualization states
+  const [selectedVisualizationType, setSelectedVisualizationType] = useState('comparison');
+  const [selectedChartType, setSelectedChartType] = useState('bar');
+
+  // Visualization configuration
+  const visualizationCategories = {
+    comparison: {
+      name: 'Diagram Perbandingan',
+      description: 'Membandingkan nilai antar kategori atau grup',
+      charts: {
+        bar: { name: 'Bar Chart', suitable: ['categorical', 'numeric'] },
+        line: { name: 'Line Chart', suitable: ['numeric', 'time'] },
+        column: { name: 'Column Chart', suitable: ['categorical', 'numeric'] },
+        radar: { name: 'Radar Chart', suitable: ['numeric'] },
+        wordcloud: { name: 'Word Cloud', suitable: ['categorical'] }
+      }
+    },
+    distribution: {
+      name: 'Diagram Distribusi',
+      description: 'Menampilkan distribusi dan sebaran data',
+      charts: {
+        histogram: { name: 'Histogram', suitable: ['numeric'] },
+        boxplot: { name: 'Box Plot', suitable: ['numeric'] },
+        density: { name: 'Density Plot', suitable: ['numeric'] },
+        violin: { name: 'Violin Plot', suitable: ['numeric'] }
+      }
+    },
+    composition: {
+      name: 'Diagram Komposisi',
+      description: 'Menunjukkan bagaimana bagian membentuk keseluruhan',
+      charts: {
+        pie: { name: 'Pie Chart', suitable: ['categorical'] },
+        treemap: { name: 'Tree Map', suitable: ['categorical', 'hierarchical'] },
+        multiset: { name: 'Multiset Bar Chart', suitable: ['categorical'] },
+        area: { name: 'Area Chart', suitable: ['numeric', 'time'] },
+        stackedbar: { name: 'Stacked Bar Chart', suitable: ['categorical'] },
+        sunburst: { name: 'Sunburst Chart', suitable: ['hierarchical'] },
+        waterfall: { name: 'Waterfall Chart', suitable: ['numeric'] }
+      }
+    },
+    relationship: {
+      name: 'Diagram Relasi',
+      description: 'Menampilkan hubungan antar variabel',
+      charts: {
+        scatter: { name: 'Scatter Plot', suitable: ['numeric'] },
+        bubble: { name: 'Bubble Chart', suitable: ['numeric'] },
+        geospatial: { name: 'Geospatial', suitable: ['geographic'] },
+        heatmap: { name: 'Heatmap', suitable: ['numeric'] },
+        network: { name: 'Network Diagram', suitable: ['relational'] }
+      }
+    }
+  };
+
+  // Function to determine suitable charts based on data
+  const getSuitableCharts = () => {
+    if (!analysis || !data) return [];
+    
+    // Enhanced column classification with new types
+    const numericColumns = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'numeric');
+    const categoricalColumns = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'categorical');
+    const binaryColumns = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'binary');
+    const identifierColumns = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'identifier');
+    
+    const hasTimeData = Object.keys(analysis.stats).some(col => 
+      col.toLowerCase().includes('date') || 
+      col.toLowerCase().includes('time') ||
+      col.toLowerCase().includes('year')
+    );
+    const hasGeoData = Object.keys(analysis.stats).some(col => 
+      col.toLowerCase().includes('lat') || 
+      col.toLowerCase().includes('lng') ||
+      col.toLowerCase().includes('location') ||
+      col.toLowerCase().includes('city')
+    );
+
+    const suitableCharts = [];
+    
+    Object.entries(visualizationCategories).forEach(([categoryKey, category]) => {
+      Object.entries(category.charts).forEach(([chartKey, chart]) => {
+        let isSuitable = false;
+        
+        chart.suitable.forEach(requirement => {
+          switch(requirement) {
+            case 'numeric':
+              if (numericColumns.length > 0) isSuitable = true;
+              break;
+            case 'categorical':
+              if (categoricalColumns.length > 0 || binaryColumns.length > 0) isSuitable = true;
+              break;
+            case 'binary':
+              if (binaryColumns.length > 0) isSuitable = true;
+              break;
+            case 'identifier':
+              if (identifierColumns.length > 0) isSuitable = true;
+              break;
+            case 'time':
+              if (hasTimeData) isSuitable = true;
+              break;
+            case 'geographic':
+              if (hasGeoData) isSuitable = true;
+              break;
+            case 'hierarchical':
+              if (categoricalColumns.length > 1) isSuitable = true;
+              break;
+            case 'relational':
+              if (numericColumns.length >= 2) isSuitable = true;
+              break;
+          }
+        });
+        
+        if (isSuitable) {
+          suitableCharts.push({
+            category: categoryKey,
+            chart: chartKey,
+            name: chart.name,
+            categoryName: category.name
+          });
+        }
+      });
+    });
+    
+    return suitableCharts;
+  };
+
   // Check backend health on component mount
   useEffect(() => {
     checkBackendHealth();
@@ -1099,7 +1223,13 @@ const MLAnalyticsDashboard = () => {
                         <span className={`text-xs px-2 py-1 rounded-full ${
                           analysis?.stats[col]?.type === 'numeric' 
                             ? 'bg-blue-100 text-blue-800' 
-                            : 'bg-green-100 text-green-800'
+                            : analysis?.stats[col]?.type === 'categorical'
+                            ? 'bg-green-100 text-green-800'
+                            : analysis?.stats[col]?.type === 'binary'
+                            ? 'bg-purple-100 text-purple-800'
+                            : analysis?.stats[col]?.type === 'identifier'
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-gray-100 text-gray-800'
                         }`}>
                           {analysis?.stats[col]?.type || 'unknown'}
                         </span>
@@ -1150,7 +1280,13 @@ const MLAnalyticsDashboard = () => {
                               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                                 stats.type === 'numeric' 
                                   ? 'bg-blue-100 text-blue-800' 
-                                  : 'bg-green-100 text-green-800'
+                                  : stats.type === 'categorical'
+                                  ? 'bg-green-100 text-green-800'
+                                  : stats.type === 'binary'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : stats.type === 'identifier'
+                                  ? 'bg-orange-100 text-orange-800'
+                                  : 'bg-gray-100 text-gray-800'
                               }`}>
                                 {stats.type}
                               </span>
@@ -1260,7 +1396,7 @@ const MLAnalyticsDashboard = () => {
         
         {analysis && data ? (
           <div className="space-y-8">
-            {/* Quick Insights Cards */}
+                        {/* Quick Insights Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
               <div className="bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl p-6 text-white">
                 <div className="flex items-center justify-between">
@@ -1298,147 +1434,349 @@ const MLAnalyticsDashboard = () => {
                 </div>
               </div>
             </div>
+            {/* Chart Category Selection */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-purple-600" />
+                Choose Visualization Type
+              </h3>
+              
+              {/* Category Tabs */}
+              <div className="flex flex-wrap gap-2 mb-6">
+                {Object.entries(visualizationCategories).map(([categoryKey, category]) => (
+                  <button
+                    key={categoryKey}
+                    onClick={() => {
+                      setSelectedVisualizationType(categoryKey);
+                      // Reset chart selection when category changes
+                      const firstChart = Object.keys(category.charts)[0];
+                      setSelectedChartType(firstChart);
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedVisualizationType === categoryKey
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {category.name}
+                  </button>
+                ))}
+              </div>
+              
+              {/* Chart Type Selection */}
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  {visualizationCategories[selectedVisualizationType]?.description}
+                </p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {Object.entries(visualizationCategories[selectedVisualizationType]?.charts || {}).map(([chartKey, chart]) => {
+                    const suitableCharts = getSuitableCharts();
+                    const isChartSuitable = suitableCharts.some(
+                      suitable => suitable.category === selectedVisualizationType && suitable.chart === chartKey
+                    );
+                    
+                    return (
+                      <button
+                        key={chartKey}
+                        onClick={() => setSelectedChartType(chartKey)}
+                        disabled={!isChartSuitable}
+                        className={`p-4 rounded-lg border-2 text-left transition-all ${
+                          selectedChartType === chartKey
+                            ? 'border-purple-500 bg-purple-50 text-purple-900'
+                            : isChartSuitable
+                            ? 'border-gray-200 bg-white hover:border-purple-300 hover:bg-purple-50'
+                            : 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        <div className="font-medium text-sm">{chart.name}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {isChartSuitable ? 'Available for your data' : 'Not suitable for current dataset'}
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          Requires: {chart.suitable.join(', ')} data
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                {getSuitableCharts().filter(chart => chart.category === selectedVisualizationType).length === 0 && (
+                  <div className="text-center py-8 text-gray-500">
+                    <div className="text-sm">No suitable charts available for current data in this category.</div>
+                    <div className="text-xs mt-1">Try uploading a dataset with different data types.</div>
+                  </div>
+                )}
+              </div>
+            </div>
 
-            {/* Visualization Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* Column Type Distribution */}
+            {/* Chart Visualization Display */}
+            {getSuitableCharts().filter(chart => chart.category === selectedVisualizationType && chart.chart === selectedChartType).length > 0 && (
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-blue-600" />
-                  Column Type Distribution
+                  <BarChart3 className="w-5 h-5 text-purple-600" />
+                  {visualizationCategories[selectedVisualizationType]?.charts[selectedChartType]?.name || 'Chart'}
                 </h3>
-                <ResponsiveContainer width="100%" height={250}>
-                  <PieChart>
-                    <Pie
-                      data={[
-                        {
-                          name: 'Numeric',
-                          value: Object.values(analysis.stats).filter(stat => stat.type === 'numeric').length,
-                          fill: '#3B82F6'
-                        },
-                        {
-                          name: 'Categorical',
-                          value: Object.values(analysis.stats).filter(stat => stat.type === 'categorical').length,
-                          fill: '#10B981'
-                        }
-                      ]}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={5}
-                      dataKey="value"
-                      label={({name, value}) => `${name}: ${value}`}
-                    >
-                      {['#3B82F6', '#10B981'].map((color, index) => (
-                        <Cell key={`cell-${index}`} fill={color} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
+                
+                {/* Render Chart Based on Selected Type */}
+                {(() => {
+                  // Point 12: System can analyze data and display charts accurately
+                  // Point 12: Primary key, unique key, or id should be used as X-axis
+                  const identifierCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'identifier');
+                  const numericCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'numeric');
+                  const categoricalCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'categorical');
+                  const binaryCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'binary');
+                  
+                  // Determine X and Y axes based on data types and chart requirements
+                  let xAxisCol, yAxisCol, colorCol;
+                  
+                  // Priority for X-axis: identifier > categorical > binary > numeric
+                  if (identifierCols.length > 0) {
+                    xAxisCol = identifierCols[0];
+                  } else if (categoricalCols.length > 0) {
+                    xAxisCol = categoricalCols[0];
+                  } else if (binaryCols.length > 0) {
+                    xAxisCol = binaryCols[0];
+                  } else {
+                    xAxisCol = numericCols[0];
+                  }
+                  
+                  // Y-axis should be numeric for most charts
+                  yAxisCol = numericCols.find(col => col !== xAxisCol) || numericCols[0];
+                  
+                  // Color grouping column (for multi-series charts)
+                  colorCol = categoricalCols.find(col => col !== xAxisCol) || binaryCols.find(col => col !== xAxisCol);
+                  
+                  const chartData = data.slice(0, 50).map(row => ({
+                    [xAxisCol]: row[xAxisCol],
+                    [yAxisCol]: parseFloat(row[yAxisCol]) || 0,
+                    ...(colorCol && { [colorCol]: row[colorCol] })
+                  }));
+                  
+                  // Comparison Charts
+                  if (selectedVisualizationType === 'comparison') {
+                    if (selectedChartType === 'bar' && xAxisCol && yAxisCol) {
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Comparing {yAxisCol} by {xAxisCol} {identifierCols.includes(xAxisCol) ? '(ID as X-axis)' : ''}
+                          </p>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <BarChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis 
+                                dataKey={xAxisCol} 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                                angle={-45}
+                                textAnchor="end"
+                                height={100}
+                              />
+                              <YAxis 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                              />
+                              <Tooltip 
+                                contentStyle={{
+                                  backgroundColor: 'white',
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: '8px'
+                                }}
+                              />
+                              <Bar 
+                                dataKey={yAxisCol} 
+                                fill="#8884d8"
+                                radius={[4, 4, 0, 0]}
+                              />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                    
+                    if (selectedChartType === 'line' && xAxisCol && yAxisCol) {
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Trend of {yAxisCol} over {xAxisCol}
+                          </p>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <LineChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis 
+                                dataKey={xAxisCol} 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                              />
+                              <YAxis 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                              />
+                              <Tooltip />
+                              <Line 
+                                type="monotone" 
+                                dataKey={yAxisCol} 
+                                stroke="#8884d8" 
+                                strokeWidth={2}
+                                dot={{ fill: '#8884d8' }}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                  }
+                  
+                  // Distribution Charts
+                  if (selectedVisualizationType === 'distribution') {
+                    if (selectedChartType === 'histogram' && numericCols.length > 0) {
+                      // Create histogram data
+                      const numericCol = numericCols[0];
+                      const values = data.map(row => parseFloat(row[numericCol])).filter(val => !isNaN(val));
+                      const min = Math.min(...values);
+                      const max = Math.max(...values);
+                      const bins = 10;
+                      const binSize = (max - min) / bins;
+                      
+                      const histogramData = Array.from({ length: bins }, (_, i) => {
+                        const binStart = min + i * binSize;
+                        const binEnd = binStart + binSize;
+                        const count = values.filter(val => val >= binStart && val < binEnd).length;
+                        return {
+                          range: `${binStart.toFixed(1)}-${binEnd.toFixed(1)}`,
+                          count: count
+                        };
+                      });
+                      
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Distribution of {numericCol}
+                          </p>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <BarChart data={histogramData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis 
+                                dataKey="range" 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                                angle={-45}
+                                textAnchor="end"
+                                height={100}
+                              />
+                              <YAxis 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                              />
+                              <Tooltip />
+                              <Bar 
+                                dataKey="count" 
+                                fill="#82ca9d"
+                                radius={[4, 4, 0, 0]}
+                              />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                  }
+                  
+                  // Composition Charts
+                  if (selectedVisualizationType === 'composition') {
+                    if (selectedChartType === 'pie' && (categoricalCols.length > 0 || binaryCols.length > 0)) {
+                      const pieCol = categoricalCols[0] || binaryCols[0];
+                      const counts = {};
+                      data.forEach(row => {
+                        const value = row[pieCol];
+                        counts[value] = (counts[value] || 0) + 1;
+                      });
+                      
+                      const pieData = Object.entries(counts).map(([key, value], index) => ({
+                        name: key,
+                        value: value,
+                        fill: `hsl(${index * 137.5 % 360}, 70%, 50%)`
+                      }));
+                      
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Composition of {pieCol}
+                          </p>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <PieChart>
+                              <Pie
+                                data={pieData}
+                                cx="50%"
+                                cy="50%"
+                                outerRadius={120}
+                                dataKey="value"
+                                label={({name, value}) => `${name}: ${value}`}
+                              >
+                                {pieData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                                ))}
+                              </Pie>
+                              <Tooltip />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                  }
+                  
+                  // Relationship Charts
+                  if (selectedVisualizationType === 'relationship') {
+                    if (selectedChartType === 'scatter' && numericCols.length >= 2) {
+                      const xCol = numericCols[0];
+                      const yCol = numericCols[1];
+                      
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Relationship between {xCol} and {yCol}
+                          </p>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <ScatterChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis 
+                                type="number"
+                                dataKey={xCol} 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                                name={xCol}
+                              />
+                              <YAxis 
+                                type="number"
+                                dataKey={yCol} 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                                name={yCol}
+                              />
+                              <Tooltip cursor={{strokeDasharray: '3 3'}} />
+                              <Scatter 
+                                dataKey={yCol} 
+                                fill="#8884d8"
+                              />
+                            </ScatterChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                  }
+                  
+                  // Default message for unsupported chart types
+                  return (
+                    <div className="text-center py-12 text-gray-500">
+                      <div className="text-lg mb-2">Chart visualization coming soon!</div>
+                      <div className="text-sm">
+                        {visualizationCategories[selectedVisualizationType]?.charts[selectedChartType]?.name} 
+                        visualization will be implemented in future updates.
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
-
-              {/* Data Distribution for first numeric column */}
-              {selectedColumns.filter(col => analysis.stats[col]?.type === 'numeric').slice(0, 1).map(col => (
-                <div key={col} className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-green-600" />
-                    {col} Distribution
-                  </h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={data.slice(0, 20)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis 
-                        dataKey={col} 
-                        tick={{fontSize: 12}}
-                        stroke="#6B7280"
-                      />
-                      <YAxis 
-                        tick={{fontSize: 12}}
-                        stroke="#6B7280"
-                      />
-                      <Tooltip 
-                        contentStyle={{
-                          backgroundColor: 'white',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '8px'
-                        }}
-                      />
-                      <Bar 
-                        dataKey={col} 
-                        fill="url(#colorGradient)"
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <defs>
-                        <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.8}/>
-                          <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.8}/>
-                        </linearGradient>
-                      </defs>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              ))}
-
-              {/* Correlation Matrix Preview */}
-              {Object.keys(analysis.correlation_matrix).length > 0 && (
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-purple-600" />
-                    Correlation Matrix
-                  </h3>
-                  <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg p-6 text-center">
-                    <div className="text-4xl mb-4">📊</div>
-                    <p className="text-gray-600 mb-4">
-                      Correlation analysis available with {Object.keys(analysis.correlation_matrix).length} variables
-                    </p>
-                    <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
-                      View Detailed Correlation
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Additional numeric column visualizations */}
-              {selectedColumns.filter(col => analysis.stats[col]?.type === 'numeric').slice(1, 4).map(col => (
-                <div key={col} className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                    <BarChart3 className="w-5 h-5 text-indigo-600" />
-                    {col} Trend
-                  </h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <LineChart data={data.slice(0, 50)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis 
-                        dataKey="index"
-                        tick={{fontSize: 12}}
-                        stroke="#6B7280"
-                      />
-                      <YAxis 
-                        tick={{fontSize: 12}}
-                        stroke="#6B7280"
-                      />
-                      <Tooltip 
-                        contentStyle={{
-                          backgroundColor: 'white',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '8px'
-                        }}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey={col} 
-                        stroke="#6366F1" 
-                        strokeWidth={2}
-                        dot={{fill: '#6366F1', strokeWidth: 0, r: 3}}
-                        activeDot={{r: 5, fill: '#6366F1'}}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ))}
-            </div>
+            )}
 
             {/* Summary Statistics Table */}
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -1452,37 +1790,96 @@ const MLAnalyticsDashboard = () => {
                     <tr className="bg-gray-50 border-b border-gray-200">
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Column</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Type</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Count</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Mean</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Std Dev</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Min</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Q1 (25%)</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Median (50%)</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Q3 (75%)</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Max</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Unique</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {Object.entries(analysis.stats)
-                      .filter(([col, stats]) => stats.type === 'numeric')
-                      .map(([col, stats]) => (
-                      <tr key={col} className="hover:bg-gray-50 transition-colors">
-                        <td className="py-3 px-4 font-medium text-gray-900">{col}</td>
-                        <td className="py-3 px-4">
-                          <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
-                            Numeric
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-gray-600">
-                          {stats.mean ? stats.mean.toFixed(2) : 'N/A'}
-                        </td>
-                        <td className="py-3 px-4 text-gray-600">
-                          {stats.std ? stats.std.toFixed(2) : 'N/A'}
-                        </td>
-                        <td className="py-3 px-4 text-gray-600">
-                          {stats.min !== undefined ? stats.min.toFixed(2) : 'N/A'}
-                        </td>
-                        <td className="py-3 px-4 text-gray-600">
-                          {stats.max !== undefined ? stats.max.toFixed(2) : 'N/A'}
-                        </td>
-                      </tr>
-                    ))}
+                    {Object.entries(analysis.stats).map(([col, stats]) => {
+                      const getTypeColor = (type) => {
+                        switch(type) {
+                          case 'numeric': return 'bg-blue-100 text-blue-800';
+                          case 'categorical': return 'bg-green-100 text-green-800';
+                          case 'binary': return 'bg-purple-100 text-purple-800';
+                          case 'identifier': return 'bg-orange-100 text-orange-800';
+                          default: return 'bg-gray-100 text-gray-800';
+                        }
+                      };
+                      
+                      const renderStatValue = (value, type = 'numeric') => {
+                        if (value === null || value === undefined) return '—';
+                        if (type === 'numeric') return Number(value).toFixed(2);
+                        return value.toString();
+                      };
+                      
+                      const isNumeric = stats.type === 'numeric';
+                      const isBinary = stats.type === 'binary';
+                      const isIdentifier = stats.type === 'identifier';
+                      
+                      return (
+                        <tr key={col} className="hover:bg-gray-50 transition-colors">
+                          <td className="py-3 px-4 font-medium text-gray-900">
+                            {col}
+                            {isIdentifier && (
+                              <div className="text-xs text-orange-600 mt-1">
+                                {stats.is_sequential && '📈 Sequential'} 
+                                {stats.confidence_score && ` (${Math.round(stats.confidence_score * 100)}% confidence)`}
+                              </div>
+                            )}
+                            {isBinary && (
+                              <div className="text-xs text-purple-600 mt-1">
+                                Values: {stats.values?.join(', ')}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`px-3 py-1 ${getTypeColor(stats.type)} rounded-full text-xs font-medium capitalize`}>
+                              {stats.type}
+                              {stats.subtype && (
+                                <div className="text-xs mt-1">{stats.subtype.replace('_', ' ')}</div>
+                              )}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {stats.count || 0}
+                          </td>
+                          {/* Point 9: Primary key/ID columns don't have Mean/Std Dev */}
+                          {/* Point 10: Binary columns don't have Mean/Std Dev/Min/Max */}
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.mean) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.std) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.min) : '—'}
+                          </td>
+                          {/* Point 11: Q1, Q2 (Median), Q3 percentiles for numeric data */}
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.q1) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.median) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.q3) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {isNumeric ? renderStatValue(stats.max) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">
+                            {stats.unique_count || stats.unique_values || '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -2328,6 +2725,191 @@ const MLAnalyticsDashboard = () => {
                         </div>
                       </label>
                     ))}
+                  </div>
+                </div>
+
+                {/* Data Integration Options */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-3">
+                    <span className="flex items-center gap-2">
+                      <span>Data Integration</span>
+                      <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">Advanced</span>
+                    </span>
+                  </label>
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={cleaningOptions.apply_integration || false}
+                        onChange={(e) => setCleaningOptions(prev => ({
+                          ...prev,
+                          apply_integration: e.target.checked
+                        }))}
+                        className="mt-1"
+                      />
+                      <div>
+                        <div className="font-medium text-gray-900">Apply Data Integration</div>
+                        <div className="text-sm text-gray-600">
+                          Keterkaitan Rekaman & Fusi Data - Identifikasi dan gabungkan data dari berbagai sumber
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Data Transformation Options */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-3">
+                    <span className="flex items-center gap-2">
+                      <span>Data Transformation</span>
+                      <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-full">Advanced</span>
+                    </span>
+                  </label>
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={cleaningOptions.apply_transformation || false}
+                        onChange={(e) => setCleaningOptions(prev => ({
+                          ...prev,
+                          apply_transformation: e.target.checked
+                        }))}
+                        className="mt-1"
+                      />
+                      <div>
+                        <div className="font-medium text-gray-900">Apply Data Transformation</div>
+                        <div className="text-sm text-gray-600">
+                          Normalisasi, Diskritisasi, Agregasi & Hirarki Konsep
+                        </div>
+                      </div>
+                    </label>
+                    
+                    {cleaningOptions.apply_transformation && (
+                      <div className="ml-6 space-y-2 border-l-2 border-green-200 pl-4">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.normalize_data || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              normalize_data: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Normalisasi Data (Z-Score)</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.discretize_data || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              discretize_data: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Diskritisasi (Binning)</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.aggregate_data || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              aggregate_data: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Agregasi Data</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.create_hierarchy || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              create_hierarchy: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Pembuatan Hirarki Konsep</span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Data Reduction Options */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-900 mb-3">
+                    <span className="flex items-center gap-2">
+                      <span>Data Reduction</span>
+                      <span className="text-xs text-purple-600 bg-purple-100 px-2 py-1 rounded-full">Advanced</span>
+                    </span>
+                  </label>
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={cleaningOptions.apply_reduction || false}
+                        onChange={(e) => setCleaningOptions(prev => ({
+                          ...prev,
+                          apply_reduction: e.target.checked
+                        }))}
+                        className="mt-1"
+                      />
+                      <div>
+                        <div className="font-medium text-gray-900">Apply Data Reduction</div>
+                        <div className="text-sm text-gray-600">
+                          Reduksi Dimensionalitas, Numerositas & Kompresi Data
+                        </div>
+                      </div>
+                    </label>
+                    
+                    {cleaningOptions.apply_reduction && (
+                      <div className="ml-6 space-y-2 border-l-2 border-purple-200 pl-4">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.feature_selection || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              feature_selection: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Feature Selection (Variance Threshold)</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.apply_pca || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              apply_pca: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">PCA (Principal Component Analysis)</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.apply_sampling || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              apply_sampling: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Data Sampling (Numerosity Reduction)</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={cleaningOptions.compress_data || false}
+                            onChange={(e) => setCleaningOptions(prev => ({
+                              ...prev,
+                              compress_data: e.target.checked
+                            }))}
+                          />
+                          <span className="text-sm">Data Compression (Dictionary Encoding)</span>
+                        </label>
+                      </div>
+                    )}
                   </div>
                 </div>
 

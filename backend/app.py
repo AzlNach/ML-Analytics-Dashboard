@@ -248,6 +248,672 @@ def get_model_algorithms():
         }
     }
 
+def detect_binary_columns(df):
+    """Detect binary columns (0/1) with strict binary recognition"""
+    binary_columns = []
+    for col in df.columns:
+        # Filter Awal: Periksa Jumlah Nilai Unik
+        unique_count = df[col].nunique()
+        
+        # Jika lebih dari 2 nilai unik, bukan binary
+        if unique_count > 2:
+            continue
+        
+        # Jika tepat 2 nilai unik, periksa apa saja kedua nilai tersebut
+        if unique_count == 2:
+            unique_vals = df[col].dropna().unique()
+            unique_set = set(unique_vals)
+            
+            # ✅ Strict binary check: Jika set nilainya adalah persis {0, 1}
+            is_strict_binary = unique_set == {0, 1} or unique_set == {0.0, 1.0}
+            
+            # Extended binary patterns for data understanding
+            is_extended_binary = (
+                unique_set.issubset({'Yes', 'No', 'yes', 'no', 'Y', 'N', 'y', 'n'}) or
+                unique_set.issubset({'True', 'False', 'true', 'false', 'T', 'F', 't', 'f'}) or
+                unique_set.issubset({'Male', 'Female', 'male', 'female', 'M', 'F', 'm', 'f'}) or
+                unique_set.issubset({'Active', 'Inactive', 'active', 'inactive'}) or
+                unique_set.issubset({'Pass', 'Fail', 'pass', 'fail'}) or
+                unique_set.issubset({True, False})
+            )
+            
+            if is_strict_binary or is_extended_binary:
+                binary_columns.append({
+                    'column': col,
+                    'values': list(unique_set),
+                    'is_strict_binary': is_strict_binary,
+                    'is_extended_binary': is_extended_binary,
+                    'binary_type': determine_binary_type(unique_set),
+                    'unique_count': unique_count,
+                    'recommendation': 'Kolom biner - tidak berlaku untuk Mean, Std Dev, Min, Max'
+                })
+    
+    return binary_columns
+
+def determine_binary_type(unique_set):
+    """Determine the type of binary column"""
+    if unique_set.issubset({0, 1, '0', '1', 0.0, 1.0}):
+        return 'numeric_binary'
+    elif unique_set.issubset({True, False}):
+        return 'boolean'
+    elif any(v.lower() in ['yes', 'no', 'y', 'n'] for v in unique_set if isinstance(v, str)):
+        return 'yes_no'
+    elif any(v.lower() in ['true', 'false', 't', 'f'] for v in unique_set if isinstance(v, str)):
+        return 'true_false'
+    elif any(v.lower() in ['male', 'female', 'm', 'f'] for v in unique_set if isinstance(v, str)):
+        return 'gender'
+    elif any(v.lower() in ['active', 'inactive'] for v in unique_set if isinstance(v, str)):
+        return 'status'
+    elif any(v.lower() in ['pass', 'fail'] for v in unique_set if isinstance(v, str)):
+        return 'pass_fail'
+    else:
+        return 'other_binary'
+
+def detect_primary_key_columns(df):
+    """Enhanced detection for primary key, unique key, or ID columns"""
+    primary_key_candidates = []
+    
+    for col in df.columns:
+        # a. Analisis Kardinalitas (Keunikan)
+        unique_count = df[col].nunique()
+        total_rows = len(df)
+        uniqueness_ratio = unique_count / total_rows if total_rows > 0 else 0
+        
+        # Skip if too few unique values (likely categorical, not ID)
+        if uniqueness_ratio < 0.8:
+            continue
+        
+        # b. Analisis Nama Kolom - Cari kata kunci atau pola umum
+        col_lower = col.lower().strip()
+        id_patterns = [
+            r'.*id$', r'^id.*', r'.*_id$', r'^id_.*',  # id patterns
+            r'.*no$', r'^no.*', r'.*_no$', r'^no_.*',  # no/nomor patterns
+            r'.*kd$', r'^kd.*', r'.*_kd$', r'^kd_.*',  # kd/kode patterns
+            r'.*code$', r'^code.*', r'.*_code$', r'^code_.*',  # code patterns
+            r'.*key$', r'^key.*', r'.*_key$', r'^key_.*',  # key patterns
+            r'.*uuid$', r'^uuid.*',  # uuid patterns
+            r'.*index$', r'^index.*',  # index patterns
+            r'.*pk$', r'^pk.*'  # primary key patterns
+        ]
+        
+        import re
+        is_id_like = any(re.match(pattern, col_lower) for pattern in id_patterns)
+        
+        # Additional ID indicators
+        id_keywords = ['customer', 'user', 'transaction', 'order', 'product', 'employee', 'account']
+        has_id_keyword = any(keyword in col_lower for keyword in id_keywords)
+        
+        # c. Analisis Sequential Pattern - Check if values are sequential
+        is_sequential = False
+        sequential_pattern = 'none'
+        
+        if df[col].dtype in ['int64', 'float64']:
+            try:
+                # Remove null values and sort
+                non_null_values = df[col].dropna().sort_values()
+                if len(non_null_values) > 3:  # Need enough data to analyze
+                    # Check if values are mostly sequential (allowing some gaps)
+                    diffs = non_null_values.diff().dropna()
+                    
+                    # Perfect sequential: mostly differences of 1
+                    if (diffs == 1).sum() / len(diffs) > 0.8:
+                        is_sequential = True
+                        sequential_pattern = 'perfect_incremental'
+                    
+                    # Nearly sequential: small consistent differences
+                    elif diffs.std() < diffs.mean() * 0.1 and diffs.mean() <= 10:
+                        is_sequential = True
+                        sequential_pattern = 'nearly_incremental'
+                    
+                    # Large gaps but still ordered
+                    elif (diffs > 0).sum() / len(diffs) > 0.9:
+                        sequential_pattern = 'ordered_with_gaps'
+            except:
+                pass
+        
+        # Decision Logic: Determine if column is likely an ID
+        confidence_score = 0
+        
+        # High uniqueness is the strongest indicator
+        if uniqueness_ratio > 0.98:
+            confidence_score += 40
+        elif uniqueness_ratio > 0.95:
+            confidence_score += 30
+        elif uniqueness_ratio > 0.90:
+            confidence_score += 20
+        
+        # Name pattern matching
+        if is_id_like:
+            confidence_score += 30
+        elif has_id_keyword:
+            confidence_score += 15
+        
+        # Sequential pattern
+        if is_sequential:
+            confidence_score += 20
+        elif sequential_pattern == 'ordered_with_gaps':
+            confidence_score += 10
+        
+        # No null values (IDs should be complete)
+        null_count = df[col].isnull().sum()
+        if null_count == 0:
+            confidence_score += 10
+        elif null_count < total_rows * 0.01:  # Less than 1% nulls
+            confidence_score += 5
+        
+        # Data type appropriateness
+        if df[col].dtype in ['int64', 'object']:  # IDs are usually integers or strings
+            confidence_score += 5
+        
+        # Consider it a primary key candidate if confidence is high enough
+        if confidence_score >= 50 or (uniqueness_ratio > 0.95 and is_id_like):
+            primary_key_candidates.append({
+                'column': col,
+                'uniqueness_ratio': float(uniqueness_ratio),
+                'unique_count': int(unique_count),
+                'total_rows': int(total_rows),
+                'is_id_like': is_id_like,
+                'has_id_keyword': has_id_keyword,
+                'is_sequential': is_sequential,
+                'sequential_pattern': sequential_pattern,
+                'null_count': int(null_count),
+                'confidence_score': confidence_score,
+                'data_type': str(df[col].dtype),
+                'recommendation': 'Primary/Unique Key - exclude from ML features, tidak berlaku untuk Mean/Std Dev'
+            })
+    
+    # Sort by confidence score (highest first)
+    primary_key_candidates.sort(key=lambda x: x['confidence_score'], reverse=True)
+    
+    return primary_key_candidates
+
+def perform_data_integration(df):
+    """Perform data integration techniques"""
+    integration_report = {
+        'record_linkage_opportunities': [],
+        'data_fusion_suggestions': [],
+        'duplicate_records': 0,
+        'integration_strategies': {
+            'record_linkage': {
+                'description': 'Integrasi data melibatkan penggabungan data dari berbagai sumber menjadi satu set data terpadu',
+                'techniques': [
+                    'Penautan data (data linking)',
+                    'Fusi data (data fusion)',
+                    'Identifikasi rekaman duplikat'
+                ]
+            },
+            'data_fusion': {
+                'description': 'Menggabungkan data dari berbagai sumber untuk menciptakan kumpulan data yang lebih komprehensif',
+                'benefits': [
+                    'Konsistensi data meningkat',
+                    'Akurasi data lebih baik',
+                    'Dataset lebih kaya untuk analisis'
+                ]
+            }
+        }
+    }
+    
+    # Record Linkage - Find potential duplicate records
+    text_columns = df.select_dtypes(include=['object']).columns
+    if len(text_columns) > 0:
+        # Simple duplicate detection based on text similarity
+        duplicates = df.duplicated(subset=text_columns, keep=False)
+        integration_report['duplicate_records'] = duplicates.sum()
+        
+        if duplicates.sum() > 0:
+            integration_report['record_linkage_opportunities'].append({
+                'type': 'exact_match_duplicates',
+                'count': duplicates.sum(),
+                'columns': list(text_columns),
+                'recommendation': 'Keterkaitan Rekaman - Identifikasi dan cocokkan rekaman yang merujuk entitas sama'
+            })
+    
+    # Data Fusion - Suggest columns that could be merged or consolidated
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            unique_count = df[col].nunique()
+            total_count = len(df)
+            
+            # If many unique values relative to total, might need fusion
+            if unique_count > total_count * 0.5:
+                integration_report['data_fusion_suggestions'].append({
+                    'column': col,
+                    'unique_values': unique_count,
+                    'suggestion': 'Fusi Data - Standardisasi atau kategorisasi nilai untuk integrasi yang lebih baik',
+                    'technique': 'Data consolidation and normalization'
+                })
+    
+    return integration_report
+
+def perform_data_transformation(df, transformation_options=None):
+    """Perform advanced data transformation"""
+    if transformation_options is None:
+        transformation_options = {}
+    
+    transformed_df = df.copy()
+    transformation_report = {
+        'normalization': {},
+        'discretization': {},
+        'aggregation': {},
+        'hierarchy_creation': {},
+        'transformation_strategies': {
+            'normalization': {
+                'description': 'Normalisasi Data - Proses penskalaan data ke rentang umum untuk memastikan konsistensi',
+                'techniques': ['Min-Max Scaling', 'Z-Score Standardization', 'Robust Scaling']
+            },
+            'discretization': {
+                'description': 'Diskritisasi - Mengubah data kontinyu menjadi kategori diskrit untuk memudahkan analisis',
+                'methods': ['Equal-width binning', 'Equal-frequency binning', 'Custom thresholds']
+            },
+            'aggregation': {
+                'description': 'Agregasi Data - Menggabungkan beberapa titik data ke dalam bentuk ringkasan',
+                'types': ['Sum', 'Average', 'Count', 'Min/Max', 'Standard Deviation']
+            },
+            'hierarchy_creation': {
+                'description': 'Pembuatan Hirarki Konsep - Mengorganisasikan data ke dalam hierarki konsep',
+                'benefits': ['Tampilan tingkat tinggi', 'Pemahaman yang lebih baik', 'Analisis multi-level']
+            }
+        }
+    }
+    
+    # Normalization
+    if transformation_options.get('normalize', True):
+        numeric_cols = transformed_df.select_dtypes(include=[np.number]).columns
+        scaler = StandardScaler()
+        
+        for col in numeric_cols:
+            if transformed_df[col].std() > 0:  # Avoid division by zero
+                original_values = transformed_df[col].copy()
+                transformed_df[col] = scaler.fit_transform(transformed_df[[col]]).flatten()
+                transformation_report['normalization'][col] = {
+                    'method': 'Z-Score Standardization',
+                    'mean': float(original_values.mean()),
+                    'std': float(original_values.std()),
+                    'min': float(original_values.min()),
+                    'max': float(original_values.max()),
+                    'transformed_mean': float(transformed_df[col].mean()),
+                    'transformed_std': float(transformed_df[col].std())
+                }
+    
+    # Discretization
+    if transformation_options.get('discretize', True):
+        numeric_cols = transformed_df.select_dtypes(include=[np.number]).columns
+        
+        for col in numeric_cols:
+            if transformed_df[col].nunique() > 10:  # Only discretize if many unique values
+                try:
+                    transformed_df[f'{col}_discrete'] = pd.cut(
+                        transformed_df[col], 
+                        bins=5, 
+                        labels=['Very Low', 'Low', 'Medium', 'High', 'Very High']
+                    )
+                    transformation_report['discretization'][col] = {
+                        'bins': 5,
+                        'new_column': f'{col}_discrete',
+                        'method': 'Equal-width binning',
+                        'categories': ['Very Low', 'Low', 'Medium', 'High', 'Very High']
+                    }
+                except:
+                    pass
+    
+    # Data Aggregation - Group similar records
+    if transformation_options.get('aggregate', False):
+        categorical_cols = transformed_df.select_dtypes(include=['object']).columns
+        numeric_cols = transformed_df.select_dtypes(include=[np.number]).columns
+        
+        if len(categorical_cols) > 0 and len(numeric_cols) > 0:
+            # Try to aggregate by the first categorical column
+            first_cat_col = categorical_cols[0]
+            if transformed_df[first_cat_col].nunique() < len(transformed_df) * 0.5:
+                agg_result = transformed_df.groupby(first_cat_col)[numeric_cols].agg(['mean', 'sum', 'count'])
+                transformation_report['aggregation'][first_cat_col] = {
+                    'grouped_by': first_cat_col,
+                    'aggregated_columns': list(numeric_cols),
+                    'operations': ['mean', 'sum', 'count'],
+                    'description': 'Agregasi berdasarkan kategori untuk ringkasan data'
+                }
+    
+    # Concept Hierarchy Creation
+    if transformation_options.get('create_hierarchy', False):
+        categorical_cols = transformed_df.select_dtypes(include=['object']).columns
+        
+        for col in categorical_cols:
+            unique_values = transformed_df[col].nunique()
+            if 5 < unique_values < 50:  # Good candidate for hierarchy
+                # Create simplified hierarchy levels
+                try:
+                    # Group similar values or create levels based on frequency
+                    value_counts = transformed_df[col].value_counts()
+                    
+                    # Create 3-level hierarchy: High, Medium, Low frequency
+                    thresholds = value_counts.quantile([0.33, 0.67])
+                    
+                    def create_hierarchy_level(value):
+                        count = value_counts.get(value, 0)
+                        if count >= thresholds.iloc[1]:
+                            return 'High_Frequency'
+                        elif count >= thresholds.iloc[0]:
+                            return 'Medium_Frequency'
+                        else:
+                            return 'Low_Frequency'
+                    
+                    transformed_df[f'{col}_hierarchy'] = transformed_df[col].apply(create_hierarchy_level)
+                    
+                    transformation_report['hierarchy_creation'][col] = {
+                        'new_column': f'{col}_hierarchy',
+                        'levels': ['High_Frequency', 'Medium_Frequency', 'Low_Frequency'],
+                        'method': 'Frequency-based hierarchy',
+                        'description': 'Hirarki berdasarkan frekuensi kemunculan nilai'
+                    }
+                except:
+                    pass
+    
+    return transformed_df, transformation_report
+
+def perform_data_reduction(df, reduction_options=None):
+    """Perform data reduction techniques"""
+    if reduction_options is None:
+        reduction_options = {}
+    
+    reduced_df = df.copy()
+    reduction_report = {
+        'dimensionality_reduction': {},
+        'numerosity_reduction': {},
+        'data_compression': {},
+        'reduction_strategies': {
+            'dimensionality_reduction': {
+                'description': 'Pengurangan Dimensionalitas - Mengurangi jumlah variabel sambil mempertahankan informasi penting',
+                'techniques': ['PCA (Principal Component Analysis)', 'Feature Selection', 'Variance Threshold']
+            },
+            'numerosity_reduction': {
+                'description': 'Pengurangan Jumlah - Mengurangi jumlah titik data dengan sampling',
+                'methods': ['Random Sampling', 'Stratified Sampling', 'Cluster-based Sampling']
+            },
+            'data_compression': {
+                'description': 'Kompresi Data - Mengurangi ukuran data dengan encoding yang lebih padat',
+                'approaches': ['Lossless Compression', 'Lossy Compression', 'Dictionary Encoding']
+            }
+        }
+    }
+    
+    # Feature Selection (Simple variance-based)
+    if reduction_options.get('feature_selection', True):
+        numeric_cols = reduced_df.select_dtypes(include=[np.number]).columns
+        
+        if len(numeric_cols) > 1:
+            from sklearn.feature_selection import VarianceThreshold
+            
+            # Remove low-variance features
+            selector = VarianceThreshold(threshold=0.01)
+            selected_features = selector.fit_transform(reduced_df[numeric_cols])
+            selected_feature_names = [numeric_cols[i] for i in range(len(numeric_cols)) if selector.get_support()[i]]
+            
+            # Update dataframe with selected features
+            reduced_df = reduced_df[selected_feature_names + list(reduced_df.select_dtypes(include=['object']).columns)]
+            
+            reduction_report['dimensionality_reduction'] = {
+                'method': 'Variance Threshold Feature Selection',
+                'original_features': len(numeric_cols),
+                'selected_features': len(selected_feature_names),
+                'removed_features': list(set(numeric_cols) - set(selected_feature_names)),
+                'variance_threshold': 0.01,
+                'description': 'Menghapus fitur dengan varians rendah untuk reduksi dimensi'
+            }
+    
+    # Principal Component Analysis (if requested)
+    if reduction_options.get('apply_pca', False):
+        numeric_cols = reduced_df.select_dtypes(include=[np.number]).columns
+        
+        if len(numeric_cols) > 2:
+            from sklearn.decomposition import PCA
+            
+            # Apply PCA to reduce to 95% variance
+            pca = PCA(n_components=0.95)
+            pca_features = pca.fit_transform(reduced_df[numeric_cols])
+            
+            # Create new column names for PCA components
+            pca_columns = [f'PC{i+1}' for i in range(pca_features.shape[1])]
+            
+            # Replace numeric columns with PCA components
+            reduced_df = reduced_df.drop(columns=numeric_cols)
+            pca_df = pd.DataFrame(pca_features, columns=pca_columns, index=reduced_df.index)
+            reduced_df = pd.concat([reduced_df, pca_df], axis=1)
+            
+            reduction_report['dimensionality_reduction']['pca'] = {
+                'method': 'Principal Component Analysis',
+                'original_features': len(numeric_cols),
+                'pca_components': len(pca_columns),
+                'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
+                'cumulative_variance': float(pca.explained_variance_ratio_.cumsum()[-1]),
+                'description': 'Reduksi dimensi menggunakan PCA dengan mempertahankan 95% varians'
+            }
+    
+    # Sampling for numerosity reduction
+    if reduction_options.get('sampling', False):
+        original_size = len(reduced_df)
+        sample_size = min(1000, original_size)  # Sample up to 1000 records
+        
+        if original_size > sample_size:
+            # Stratified sampling if categorical columns exist
+            categorical_cols = reduced_df.select_dtypes(include=['object']).columns
+            
+            if len(categorical_cols) > 0:
+                # Stratified sampling based on first categorical column
+                first_cat = categorical_cols[0]
+                reduced_df = reduced_df.groupby(first_cat, group_keys=False).apply(
+                    lambda x: x.sample(min(len(x), max(1, int(sample_size * len(x) / original_size))), 
+                                     random_state=42)
+                )
+                reduction_report['numerosity_reduction'] = {
+                    'method': 'Stratified Sampling',
+                    'original_size': original_size,
+                    'reduced_size': len(reduced_df),
+                    'reduction_ratio': len(reduced_df) / original_size,
+                    'stratified_by': first_cat,
+                    'description': 'Sampling berdasarkan strata untuk mempertahankan distribusi'
+                }
+            else:
+                # Random sampling
+                reduced_df = reduced_df.sample(n=sample_size, random_state=42)
+                reduction_report['numerosity_reduction'] = {
+                    'method': 'Random Sampling',
+                    'original_size': original_size,
+                    'reduced_size': sample_size,
+                    'reduction_ratio': sample_size / original_size,
+                    'description': 'Sampling acak untuk reduksi jumlah data'
+                }
+    
+    # Data Compression through encoding
+    if reduction_options.get('compress', False):
+        # Dictionary encoding for categorical columns
+        categorical_cols = reduced_df.select_dtypes(include=['object']).columns
+        compression_info = {}
+        
+        for col in categorical_cols:
+            if reduced_df[col].nunique() < len(reduced_df) * 0.8:  # Suitable for encoding
+                # Create dictionary encoding
+                unique_values = reduced_df[col].unique()
+                encoding_dict = {val: idx for idx, val in enumerate(unique_values)}
+                
+                # Apply encoding
+                reduced_df[f'{col}_encoded'] = reduced_df[col].map(encoding_dict)
+                
+                compression_info[col] = {
+                    'encoding_dict': encoding_dict,
+                    'unique_values': len(unique_values),
+                    'compression_ratio': len(unique_values) / len(reduced_df),
+                    'new_column': f'{col}_encoded'
+                }
+        
+        if compression_info:
+            reduction_report['data_compression'] = {
+                'method': 'Dictionary Encoding',
+                'compressed_columns': compression_info,
+                'description': 'Encoding kamus untuk kompresi data kategorikal'
+            }
+    
+    return reduced_df, reduction_report
+
+def generate_enhanced_data_quality_report(df):
+    """Generate comprehensive data quality report with advanced insights"""
+    report = {
+        'basic_info': {
+            'shape': df.shape,
+            'memory_usage': df.memory_usage(deep=True).sum(),
+            'dtypes': df.dtypes.astype(str).to_dict()
+        },
+        'data_types': {
+            'numeric_columns': list(df.select_dtypes(include=[np.number]).columns),
+            'categorical_columns': list(df.select_dtypes(include=['object']).columns),
+            'binary_columns': detect_binary_columns(df),
+            'primary_key_candidates': detect_primary_key_columns(df)
+        },
+        'data_quality': {
+            'missing_values': df.isnull().sum().to_dict(),
+            'missing_percentage': (df.isnull().sum() / len(df) * 100).to_dict(),
+            'duplicate_rows': df.duplicated().sum(),
+            'unique_values_per_column': df.nunique().to_dict()
+        },
+        'statistical_summary': {},
+        'data_distribution': {},
+        'outliers': {},
+        'integration_analysis': perform_data_integration(df),
+        'transformation_opportunities': {
+            'normalization_candidates': [],
+            'discretization_candidates': [],
+            'aggregation_opportunities': [],
+            'hierarchy_creation_candidates': []
+        },
+        'reduction_opportunities': {
+            'high_variance_features': [],
+            'low_variance_features': [],
+            'correlation_analysis': {},
+            'sampling_recommendations': {}
+        }
+    }
+    
+    # Statistical summary for numeric columns
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if len(numeric_cols) > 0:
+        stats = df[numeric_cols].describe()
+        report['statistical_summary'] = stats.to_dict()
+        
+        # Outlier detection using IQR method
+        for col in numeric_cols:
+            Q1 = df[col].quantile(0.25)
+            Q3 = df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            
+            outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
+            report['outliers'][col] = {
+                'count': len(outliers),
+                'percentage': len(outliers) / len(df) * 100,
+                'lower_bound': float(lower_bound),
+                'upper_bound': float(upper_bound)
+            }
+            
+            # Transformation opportunities
+            col_range = df[col].max() - df[col].min()
+            col_std = df[col].std()
+            
+            if col_range > 1000 or col_std > 100:
+                report['transformation_opportunities']['normalization_candidates'].append({
+                    'column': col,
+                    'reason': 'Wide range or high standard deviation',
+                    'range': float(col_range),
+                    'std': float(col_std)
+                })
+            
+            if df[col].nunique() > 20:
+                report['transformation_opportunities']['discretization_candidates'].append({
+                    'column': col,
+                    'unique_values': df[col].nunique(),
+                    'reason': 'High cardinality numeric column suitable for binning'
+                })
+            
+            # Variance analysis for reduction
+            variance = df[col].var()
+            if variance < 0.01:
+                report['reduction_opportunities']['low_variance_features'].append({
+                    'column': col,
+                    'variance': float(variance),
+                    'recommendation': 'Consider removing due to low variance'
+                })
+            else:
+                report['reduction_opportunities']['high_variance_features'].append({
+                    'column': col,
+                    'variance': float(variance)
+                })
+    
+    # Distribution analysis for categorical columns
+    categorical_cols = df.select_dtypes(include=['object']).columns
+    for col in categorical_cols:
+        value_counts = df[col].value_counts().head(10)
+        report['data_distribution'][col] = {
+            'top_values': value_counts.to_dict(),
+            'unique_count': df[col].nunique(),
+            'most_frequent': value_counts.index[0] if len(value_counts) > 0 else None
+        }
+        
+        # Hierarchy creation opportunities
+        unique_count = df[col].nunique()
+        if 5 < unique_count < 50:
+            report['transformation_opportunities']['hierarchy_creation_candidates'].append({
+                'column': col,
+                'unique_values': unique_count,
+                'reason': 'Suitable number of categories for hierarchy creation'
+            })
+    
+    # Aggregation opportunities
+    if len(categorical_cols) > 0 and len(numeric_cols) > 0:
+        for cat_col in categorical_cols:
+            if df[cat_col].nunique() < len(df) * 0.3:  # Not too many unique values
+                report['transformation_opportunities']['aggregation_opportunities'].append({
+                    'groupby_column': cat_col,
+                    'unique_groups': df[cat_col].nunique(),
+                    'numeric_columns_for_aggregation': list(numeric_cols),
+                    'reason': 'Suitable categorical column for grouping numeric data'
+                })
+    
+    # Correlation analysis for reduction
+    if len(numeric_cols) > 1:
+        try:
+            correlation_matrix = df[numeric_cols].corr()
+            high_correlations = []
+            
+            for i in range(len(correlation_matrix.columns)):
+                for j in range(i+1, len(correlation_matrix.columns)):
+                    corr_value = correlation_matrix.iloc[i, j]
+                    if abs(corr_value) > 0.8:  # High correlation
+                        high_correlations.append({
+                            'column1': correlation_matrix.columns[i],
+                            'column2': correlation_matrix.columns[j],
+                            'correlation': float(corr_value),
+                            'recommendation': 'Consider removing one of these highly correlated features'
+                        })
+            
+            report['reduction_opportunities']['correlation_analysis'] = {
+                'high_correlations': high_correlations,
+                'description': 'Highly correlated features that might be redundant'
+            }
+        except:
+            pass
+    
+    # Sampling recommendations
+    dataset_size = len(df)
+    if dataset_size > 10000:
+        report['reduction_opportunities']['sampling_recommendations'] = {
+            'current_size': dataset_size,
+            'recommended_sample_size': min(5000, dataset_size),
+            'sampling_ratio': min(5000, dataset_size) / dataset_size,
+            'reason': 'Large dataset - sampling can improve processing speed',
+            'suggested_method': 'Stratified sampling if categorical columns exist, random sampling otherwise'
+        }
+    
+    return report
+
 def preprocess_data(df, columns=None):
     """Preprocess data for ML algorithms with improved handling"""
     try:
@@ -260,6 +926,21 @@ def preprocess_data(df, columns=None):
             if not existing_columns:
                 raise ValueError("None of the selected columns exist in the dataframe")
             df = df[existing_columns].copy()
+        
+        # Detect and exclude primary key columns to avoid bias
+        primary_key_candidates = detect_primary_key_columns(df)
+        excluded_pk_columns = []
+        
+        for pk_info in primary_key_candidates:
+            col = pk_info['column']
+            if pk_info['uniqueness_ratio'] > 0.95:  # Highly unique columns
+                excluded_pk_columns.append(col)
+                print(f"Excluding potential primary key column: {col} (uniqueness: {pk_info['uniqueness_ratio']:.3f})")
+        
+        # Remove primary key columns from dataset for ML processing
+        if excluded_pk_columns:
+            df = df.drop(columns=excluded_pk_columns)
+            print(f"Excluded primary key columns: {excluded_pk_columns}")
         
         # Handle complex data types (lists, tuples, arrays) before other processing
         for col in df.columns:
@@ -538,7 +1219,7 @@ def convert_numpy_types(obj):
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_data():
-    """Analyze uploaded CSV data"""
+    """Analyze uploaded CSV data with enhanced type detection"""
     try:
         data = request.json
         
@@ -561,34 +1242,73 @@ def analyze_data():
         
         df = clean_dataframe(df)
         
-        # Basic statistics
+        # Enhanced column type detection
+        binary_columns = detect_binary_columns(df)
+        primary_key_columns = detect_primary_key_columns(df)
+        
+        # Create lookup sets for faster checking
+        binary_column_names = {col['column'] for col in binary_columns}
+        primary_key_column_names = {col['column'] for col in primary_key_columns}
+        
+        # Enhanced statistics with proper type classification
         stats = {}
         for column in df.columns:
-            # Check for numeric columns (including nullable Int64)
-            if df[column].dtype in ['int64', 'float64', 'Int64']:
-                # Handle NaN values in calculations
-                col_data = df[column].dropna()
+            col_data = df[column].dropna()
+            
+            # Determine column type with priority: identifier > binary > numeric > categorical
+            if column in primary_key_column_names:
+                # Point 9: Primary keys don't have statistical measures
+                pk_info = next(pk for pk in primary_key_columns if pk['column'] == column)
+                stats[column] = {
+                    'type': 'identifier',
+                    'subtype': 'primary_key',
+                    'unique_count': int(pk_info['unique_count']),
+                    'uniqueness_ratio': float(pk_info['uniqueness_ratio']),
+                    'confidence_score': pk_info['confidence_score'],
+                    'is_sequential': pk_info['is_sequential'],
+                    'count': int(df[column].count()),
+                    'null_count': int(pk_info['null_count']),
+                    'recommendation': pk_info['recommendation']
+                }
+            elif column in binary_column_names:
+                # Point 10: Binary columns don't have Mean, Std Dev, Min, Max
+                binary_info = next(bin_col for bin_col in binary_columns if bin_col['column'] == column)
+                stats[column] = {
+                    'type': 'binary',
+                    'subtype': binary_info['binary_type'],
+                    'values': binary_info['values'],
+                    'is_strict_binary': binary_info['is_strict_binary'],
+                    'unique_count': int(binary_info['unique_count']),
+                    'count': int(df[column].count()),
+                    'null_count': int(df[column].isnull().sum()),
+                    'recommendation': binary_info['recommendation']
+                }
+            elif df[column].dtype in ['int64', 'float64', 'Int64']:
+                # Point 11: Enhanced numeric statistics with percentiles
                 if len(col_data) > 0:
                     stats[column] = {
                         'type': 'numeric',
-                        'mean': float(col_data.mean()) if len(col_data) > 0 else None,
-                        'std': float(col_data.std()) if len(col_data) > 1 else None,
-                        'min': float(col_data.min()) if len(col_data) > 0 else None,
-                        'max': float(col_data.max()) if len(col_data) > 0 else None,
-                        'median': float(col_data.median()) if len(col_data) > 0 else None,
-                        'count': int(df[column].count())
+                        'mean': float(col_data.mean()),
+                        'std': float(col_data.std()) if len(col_data) > 1 else 0.0,
+                        'min': float(col_data.min()),
+                        'max': float(col_data.max()),
+                        'median': float(col_data.median()),
+                        'q1': float(col_data.quantile(0.25)),  # 25th percentile
+                        'q3': float(col_data.quantile(0.75)),  # 75th percentile
+                        'count': int(df[column].count()),
+                        'null_count': int(df[column].isnull().sum()),
+                        'unique_count': int(df[column].nunique())
                     }
                 else:
                     stats[column] = {
                         'type': 'numeric',
-                        'mean': None,
-                        'std': None,
-                        'min': None,
-                        'max': None,
-                        'median': None,
-                        'count': 0
+                        'mean': None, 'std': None, 'min': None, 'max': None,
+                        'median': None, 'q1': None, 'q3': None,
+                        'count': 0, 'null_count': int(df[column].isnull().sum()),
+                        'unique_count': 0
                     }
             else:
+                # Categorical columns
                 value_counts = df[column].value_counts()
                 most_common_dict = {}
                 for k, v in value_counts.head(5).items():
@@ -601,29 +1321,44 @@ def analyze_data():
                 
                 stats[column] = {
                     'type': 'categorical',
-                    'unique': int(df[column].nunique()),
+                    'unique_count': int(df[column].nunique()),
                     'most_common': most_common_dict,
-                    'count': int(df[column].count())
+                    'count': int(df[column].count()),
+                    'null_count': int(df[column].isnull().sum())
                 }
         
-        # Correlation matrix for numeric columns
-        numeric_df = df.select_dtypes(include=[np.number])
+        # Correlation matrix for numeric columns only (excluding binary and identifier)
+        numeric_columns = [col for col in df.columns 
+                          if col not in binary_column_names 
+                          and col not in primary_key_column_names 
+                          and df[col].dtype in ['int64', 'float64', 'Int64']]
+        
         correlation_matrix = {}
-        if not numeric_df.empty:
-            corr_df = numeric_df.corr()
-            # Convert to dict with proper handling of NaN values
-            for col1 in corr_df.columns:
-                correlation_matrix[col1] = {}
-                for col2 in corr_df.columns:
-                    corr_val = corr_df.loc[col1, col2]
-                    correlation_matrix[col1][col2] = float(corr_val) if not pd.isna(corr_val) else None
+        if numeric_columns:
+            numeric_df = df[numeric_columns]
+            if not numeric_df.empty:
+                corr_df = numeric_df.corr()
+                # Convert to dict with proper handling of NaN values
+                for col1 in corr_df.columns:
+                    correlation_matrix[col1] = {}
+                    for col2 in corr_df.columns:
+                        corr_val = corr_df.loc[col1, col2]
+                        correlation_matrix[col1][col2] = float(corr_val) if not pd.isna(corr_val) else None
         
         return safe_json_response({
             'stats': convert_numpy_types(stats),
             'correlation_matrix': convert_numpy_types(correlation_matrix),
             'shape': [int(df.shape[0]), int(df.shape[1])],
             'columns': list(df.columns),
-            'data_types': convert_numpy_types(df.dtypes.astype(str).to_dict())
+            'data_types': convert_numpy_types(df.dtypes.astype(str).to_dict()),
+            'binary_columns': convert_numpy_types(binary_columns),
+            'primary_key_columns': convert_numpy_types(primary_key_columns),
+            'type_summary': {
+                'numeric': len([col for col, stat in stats.items() if stat['type'] == 'numeric']),
+                'categorical': len([col for col, stat in stats.items() if stat['type'] == 'categorical']),
+                'binary': len([col for col, stat in stats.items() if stat['type'] == 'binary']),
+                'identifier': len([col for col, stat in stats.items() if stat['type'] == 'identifier'])
+            }
         })
         
     except Exception as e:
@@ -1072,6 +1807,44 @@ def get_training_data():
     """Get list of available training datasets"""
     return safe_json_response(convert_numpy_types(load_training_data()))
 
+@app.route('/api/save-cleaned-data', methods=['POST'])
+def save_cleaned_data():
+    """Save cleaned data to training_data directory"""
+    try:
+        data = request.json
+        
+        if not data or 'csv_data' not in data or 'filename' not in data:
+            return jsonify({'error': 'Missing csv_data or filename'}), 400
+        
+        csv_data = data['csv_data']
+        filename = data['filename']
+        
+        # Ensure filename has proper format - fix naming convention
+        if not filename.endswith('_cleaned.csv'):
+            # Remove .csv first, then add _cleaned.csv to avoid .csv_cleaned format
+            if filename.endswith('.csv'):
+                filename = filename[:-4] + '_cleaned.csv'
+            else:
+                filename = filename + '_cleaned.csv'
+        
+        # Convert to DataFrame and save
+        df = pd.DataFrame(csv_data)
+        filepath = os.path.join(TRAINING_DATA_DIR, filename)
+        df.to_csv(filepath, index=False)
+        
+        print(f"Saved cleaned data to: {filepath}")
+        
+        return safe_json_response({
+            'success': True,
+            'message': f'Cleaned data saved as {filename}',
+            'filepath': filepath,
+            'shape': df.shape
+        })
+        
+    except Exception as e:
+        print(f"Error saving cleaned data: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/train-from-data', methods=['POST'])
 def train_from_data():
     """Train model using data sent from frontend"""
@@ -1496,66 +2269,56 @@ def generate_data_quality_report():
         df = pd.DataFrame(cleaned_csv_data)
         df = clean_dataframe(df)
         
-        # Generate quality report
+        # Generate enhanced quality report
+        enhanced_report = generate_enhanced_data_quality_report(df)
+        
+        # Create simplified report for frontend compatibility
         report = {
             'totalRows': len(df),
             'totalColumns': len(df.columns),
-            'missingValues': {},
-            'duplicates': 0,
+            'missingValues': enhanced_report['data_quality']['missing_values'],
+            'duplicates': enhanced_report['data_quality']['duplicate_rows'],
             'outliers': {},
-            'dataTypes': {},
-            'memoryUsage': df.memory_usage(deep=True).sum(),
-            'summary': {}
+            'dataTypes': enhanced_report['basic_info']['dtypes'],
+            'memoryUsage': enhanced_report['basic_info']['memory_usage'],
+            'summary': {},
+            # Enhanced features
+            'binaryColumns': enhanced_report['data_types']['binary_columns'],
+            'primaryKeyCandidates': enhanced_report['data_types']['primary_key_candidates'],
+            'integrationAnalysis': enhanced_report['integration_analysis'],
+            'transformationOpportunities': enhanced_report['transformation_opportunities'],
+            'reductionOpportunities': enhanced_report['reduction_opportunities']
         }
         
-        # Count missing values per column
-        for col in df.columns:
-            missing_count = df[col].isnull().sum()
-            report['missingValues'][col] = int(missing_count)
-            report['dataTypes'][col] = str(df[col].dtype)
+        # Convert outliers to simple format
+        for col, outlier_data in enhanced_report['outliers'].items():
+            if outlier_data['count'] > 0:
+                report['outliers'][col] = outlier_data['count']
         
-        # Count duplicate rows
-        report['duplicates'] = int(df.duplicated().sum())
-        
-        # Detect outliers for numeric columns using IQR method
+        # Convert summary statistics to simple format
         for col in df.columns:
-            if df[col].dtype in ['int64', 'float64', 'Int64']:
-                values = df[col].dropna()
-                if len(values) > 0:
-                    Q1 = values.quantile(0.25)
-                    Q3 = values.quantile(0.75)
-                    IQR = Q3 - Q1
-                    lower_bound = Q1 - 1.5 * IQR
-                    upper_bound = Q3 + 1.5 * IQR
-                    
-                    outliers = values[(values < lower_bound) | (values > upper_bound)]
-                    if len(outliers) > 0:
-                        report['outliers'][col] = int(len(outliers))
-        
-        # Generate summary statistics
-        for col in df.columns:
-            if df[col].dtype in ['int64', 'float64', 'Int64']:
-                col_data = df[col].dropna()
-                if len(col_data) > 0:
-                    report['summary'][col] = {
-                        'type': 'numeric',
-                        'count': int(len(col_data)),
-                        'mean': float(col_data.mean()),
-                        'std': float(col_data.std()),
-                        'min': float(col_data.min()),
-                        'max': float(col_data.max()),
-                        'unique': int(col_data.nunique())
-                    }
-            else:
-                col_data = df[col].dropna()
-                if len(col_data) > 0:
-                    report['summary'][col] = {
-                        'type': 'categorical',
-                        'count': int(len(col_data)),
-                        'unique': int(col_data.nunique()),
-                        'top': str(col_data.mode().iloc[0]) if len(col_data.mode()) > 0 else 'N/A',
-                        'freq': int(col_data.value_counts().iloc[0]) if len(col_data.value_counts()) > 0 else 0
-                    }
+            if col in enhanced_report['statistical_summary']:
+                # Numeric column
+                stats = enhanced_report['statistical_summary'][col]
+                report['summary'][col] = {
+                    'type': 'numeric',
+                    'count': int(stats['count']),
+                    'mean': float(stats['mean']),
+                    'std': float(stats['std']),
+                    'min': float(stats['min']),
+                    'max': float(stats['max']),
+                    'unique': enhanced_report['data_quality']['unique_values_per_column'][col]
+                }
+            elif col in enhanced_report['data_distribution']:
+                # Categorical column
+                dist_data = enhanced_report['data_distribution'][col]
+                report['summary'][col] = {
+                    'type': 'categorical',
+                    'count': len(df[col].dropna()),
+                    'unique': dist_data['unique_count'],
+                    'top': dist_data['most_frequent'],
+                    'freq': list(dist_data['top_values'].values())[0] if dist_data['top_values'] else 0
+                }
         
         return safe_json_response(convert_numpy_types(report))
         
@@ -1567,7 +2330,7 @@ def generate_data_quality_report():
 
 @app.route('/api/clean-data', methods=['POST'])
 def clean_data():
-    """Clean data based on user preferences"""
+    """Clean data based on user preferences with advanced techniques"""
     try:
         data = request.json
         
@@ -1590,6 +2353,9 @@ def clean_data():
         
         # Apply cleaning operations based on user choices
         original_size = len(df)
+        
+        # Generate comprehensive data quality report before cleaning
+        pre_cleaning_report = generate_enhanced_data_quality_report(df)
         
         # Handle missing values
         missing_strategy = cleaning_options.get('missingValues', 'fill_mean')
@@ -1636,6 +2402,36 @@ def clean_data():
                 # Remove outliers
                 df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)]
         
+        # Apply advanced data processing techniques
+        transformation_report = {}
+        reduction_report = {}
+        
+        # Data Integration
+        if cleaning_options.get('apply_integration', False):
+            integration_report = perform_data_integration(df)
+        else:
+            integration_report = pre_cleaning_report['integration_analysis']
+        
+        # Data Transformation
+        if cleaning_options.get('apply_transformation', False):
+            transformation_options = {
+                'normalize': cleaning_options.get('normalize_data', False),
+                'discretize': cleaning_options.get('discretize_data', False),
+                'aggregate': cleaning_options.get('aggregate_data', False)
+            }
+            df, transformation_report = perform_data_transformation(df, transformation_options)
+        
+        # Data Reduction
+        if cleaning_options.get('apply_reduction', False):
+            reduction_options = {
+                'feature_selection': cleaning_options.get('feature_selection', False),
+                'sampling': cleaning_options.get('apply_sampling', False)
+            }
+            df, reduction_report = perform_data_reduction(df, reduction_options)
+        
+        # Generate post-cleaning data quality report
+        post_cleaning_report = generate_enhanced_data_quality_report(df)
+        
         # Convert cleaned DataFrame back to list of dictionaries
         cleaned_result = df.to_dict('records')
         
@@ -1657,12 +2453,23 @@ def clean_data():
                 'duplicates_strategy': duplicates_strategy,
                 'outliers_strategy': outliers_strategy,
                 'rows_removed': original_size - len(df)
+            },
+            'advanced_processing': {
+                'data_integration': integration_report,
+                'data_transformation': transformation_report,
+                'data_reduction': reduction_report
+            },
+            'data_quality_reports': {
+                'before_cleaning': convert_numpy_types(pre_cleaning_report),
+                'after_cleaning': convert_numpy_types(post_cleaning_report)
             }
         }
         
-        return jsonify(result)
+        return safe_json_response(convert_numpy_types(result))
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'Data cleaning failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
