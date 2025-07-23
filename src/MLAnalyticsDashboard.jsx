@@ -2475,7 +2475,7 @@ const MLAnalyticsDashboard = () => {
               <ModelTrainingComponent
                 trainingData={[
                   {
-                    filename: cleanedData ? `${fileName}_cleaned` : fileName,
+                    filename: getCurrentDatasetName(),
                     shape: [(cleanedData || data).length, columns.length],
                     columns: columns
                   }
