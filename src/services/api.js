@@ -332,6 +332,31 @@ class MLAnalyticsAPI {
             throw error;
         }
     }
+
+    static async saveCleanedData(csvData, filename) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/save-cleaned-data`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    csv_data: csvData,
+                    filename: filename
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to save cleaned data');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Failed to save cleaned data:', error);
+            throw error;
+        }
+    }
 }
 
 export default MLAnalyticsAPI;
