@@ -357,6 +357,144 @@ class MLAnalyticsAPI {
             throw error;
         }
     }
+
+    static async detectCategoricalColumns(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-categorical`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Categorical detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Categorical detection failed:', error);
+            throw error;
+        }
+    }
+
+    static async detectBinaryColumns(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-binary`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Binary detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Binary detection failed:', error);
+            throw error;
+        }
+    }
+
+    static async detectPrimaryKey(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-primary-key`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Primary key detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Primary key detection failed:', error);
+            throw error;
+        }
+    }
+
+    static async performDataIntegration(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/data-integration`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Data integration failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Data integration failed:', error);
+            throw error;
+        }
+    }
+
+    static async performDataTransformation(data, transformationOptions = {}) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/data-transformation`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    data,
+                    transformation_options: transformationOptions
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Data transformation failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Data transformation failed:', error);
+            throw error;
+        }
+    }
+
+    static async performDataReduction(data, reductionOptions = {}) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/data-reduction`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    data,
+                    reduction_options: reductionOptions
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Data reduction failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Data reduction failed:', error);
+            throw error;
+        }
+    }
 }
 
 export default MLAnalyticsAPI;

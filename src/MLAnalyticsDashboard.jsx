@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Upload, FileText, BarChart3, Brain, AlertTriangle, Layers, TreePine, RefreshCw, Server, Target, Download, CheckCircle, XCircle, Clock, Zap, TrendingUp, Database, Settings, Play } from 'lucide-react';
-import { ResponsiveContainer, BarChart, ScatterChart, CartesianGrid, XAxis, YAxis, Tooltip, Bar, Scatter, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
+import { ResponsiveContainer, BarChart, ScatterChart, CartesianGrid, XAxis, YAxis, Tooltip, Bar, Scatter, LineChart, Line, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from 'recharts';
 import MLAnalyticsAPI from './services/api';
 import ModelTrainingComponent from './ModelTrainingComponent';
 import PredictionComponent from './PredictionComponent';
@@ -38,6 +38,13 @@ const MLAnalyticsDashboard = () => {
   // Visualization states
   const [selectedVisualizationType, setSelectedVisualizationType] = useState('comparison');
   const [selectedChartType, setSelectedChartType] = useState('bar');
+  const [selectedXAxis, setSelectedXAxis] = useState('');
+  const [selectedYAxis, setSelectedYAxis] = useState('');
+  const [selectedRadarItem, setSelectedRadarItem] = useState(0);
+
+  // Progress bar states
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [processingStage, setProcessingStage] = useState('');
 
   // Visualization configuration
   const visualizationCategories = {
@@ -451,11 +458,31 @@ const MLAnalyticsDashboard = () => {
     setFileName(file.name);
     setLoading(true);
     setWorkflowStep(1);
+    setUploadProgress(0);
+    setProcessingStage('Reading file...');
 
     try {
+      // Stage 1: File reading (0-25%)
+      setUploadProgress(5);
+      await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for UX
+      setProcessingStage('Loading file content...');
+      setUploadProgress(15);
       const text = await file.text();
-      const parsed = parseCSV(text);
+      setUploadProgress(25);
       
+      // Stage 2: CSV parsing (25-50%)
+      setProcessingStage('Parsing CSV structure...');
+      setUploadProgress(30);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const parsed = parseCSV(text);
+      setProcessingStage('Validating data format...');
+      setUploadProgress(45);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setUploadProgress(50);
+      
+      // Stage 3: Setting data (50-70%)
+      setProcessingStage('Processing data structure...');
+      setUploadProgress(55);
       setData(parsed.rows);
       setColumns(parsed.headers);
       setSelectedColumns(parsed.headers.filter(h => {
@@ -463,21 +490,62 @@ const MLAnalyticsDashboard = () => {
         return typeof firstValue === 'number';
       }));
 
+      // Initialize axis selections with first available columns
+      const numericCols = parsed.headers.filter(h => {
+        const firstValue = parsed.rows[0]?.[h];
+        return typeof firstValue === 'number';
+      });
+      
+      // Use backend to detect categorical columns
+      let categoricalCols = [];
+      try {
+        const categoricalResult = await MLAnalyticsAPI.detectCategoricalColumns(parsed.rows);
+        categoricalCols = categoricalResult.categorical_columns.map(col => col.column);
+        console.log('Detected categorical columns from backend:', categoricalCols);
+      } catch (error) {
+        console.warn('Failed to detect categorical columns from backend, using fallback:', error);
+        // Fallback to simple string detection
+        categoricalCols = parsed.headers.filter(h => {
+          const firstValue = parsed.rows[0]?.[h];
+          return typeof firstValue === 'string';
+        });
+      }
+      
+      setSelectedXAxis(categoricalCols[0] || parsed.headers[0] || '');
+      setSelectedYAxis(numericCols[0] || parsed.headers[1] || '');
+      setProcessingStage('Preparing analysis...');
+      setUploadProgress(70);
+
+      // Stage 4: Backend analysis (70-100%)
+      setProcessingStage('Connecting to analysis engine...');
+      setUploadProgress(75);
+
       // Automatically proceed to Step 2: Analysis & Understanding
       if (backendStatus === 'connected') {
         try {
+          setProcessingStage('Running statistical analysis...');
+          setUploadProgress(85);
           const cleanedData = cleanDataForAPI(parsed.rows);
           const analysisResult = await analyzeDataWithAPI(cleanedData);
           setAnalysis(analysisResult);
           
+          setProcessingStage('Generating quality report...');
+          setUploadProgress(95);
           // Generate data quality report
           const qualityReport = await generateDataQualityReport(parsed.rows, analysisResult);
           setDataQualityReport(qualityReport);
           
-          setWorkflowStep(2);
-          setActiveTab('overview');
+          setProcessingStage('Analysis complete! 🎉');
+          setUploadProgress(100);
+          
+          setTimeout(() => {
+            setWorkflowStep(2);
+            setActiveTab('overview');
+          }, 800);
         } catch (analysisError) {
           console.warn('Analysis failed, but continuing with basic functionality:', analysisError);
+          setProcessingStage('Generating basic analysis...');
+          setUploadProgress(90);
           // Set basic analysis structure so the app doesn't break
           setAnalysis({
             stats: {},
@@ -491,16 +559,31 @@ const MLAnalyticsDashboard = () => {
           const qualityReport = await generateDataQualityReport(parsed.rows, {});
           setDataQualityReport(qualityReport);
           
-          setWorkflowStep(2);
-          setActiveTab('overview');
+          setProcessingStage('Basic analysis complete!');
+          setUploadProgress(100);
+          
+          setTimeout(() => {
+            setWorkflowStep(2);
+            setActiveTab('overview');
+          }, 800);
         }
+      } else {
+        setProcessingStage('File processing complete!');
+        setUploadProgress(100);
+        setTimeout(() => {
+          setWorkflowStep(2);
+        }, 500);
       }
 
     } catch (error) {
       console.error('Error processing file:', error);
+      setProcessingStage('❌ Error occurred during processing');
+      setUploadProgress(0);
       alert('Error processing file: ' + error.message);
     } finally {
-      setLoading(false);
+      setTimeout(() => {
+        setLoading(false);
+      }, 1000);
     }
   }, [backendStatus, columns]);
 
@@ -553,10 +636,19 @@ const MLAnalyticsDashboard = () => {
       // Decision Tree - Use a more flexible approach for target column selection
       let decisionTreeResult = null;
       
-      // Look for categorical columns first, but also consider high-cardinality numeric columns
-      const categoricalColumns = columns.filter(col => 
-        analysis?.stats[col]?.type === 'categorical'
-      );
+      // Look for categorical columns using backend detection
+      let categoricalColumns = [];
+      try {
+        const categoricalResult = await MLAnalyticsAPI.detectCategoricalColumns(data);
+        categoricalColumns = categoricalResult.categorical_columns.map(col => col.column);
+        console.log('Backend detected categorical columns:', categoricalColumns);
+      } catch (error) {
+        console.warn('Failed to get categorical columns from backend, using analysis fallback:', error);
+        // Fallback to analysis stats
+        categoricalColumns = columns.filter(col => 
+          analysis?.stats[col]?.type === 'categorical'
+        );
+      }
       
       // Also consider columns that might be IDs or have high cardinality (good targets for classification)
       const potentialTargetColumns = columns.filter(col => {
@@ -847,6 +939,64 @@ const MLAnalyticsDashboard = () => {
               </div>
             </div>
           </div>
+
+          {/* Progress Bar */}
+          {loading && uploadProgress > 0 && (
+            <div className="mt-6 bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-blue-600" />
+                  Processing Your Dataset
+                </h4>
+                <span className="text-sm font-medium text-gray-600">{uploadProgress}%</span>
+              </div>
+              
+              <div className="w-full bg-gray-200 rounded-full h-3 mb-3 overflow-hidden progress-bar-enhanced">
+                <div 
+                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-500 ease-out"
+                  style={{width: `${uploadProgress}%`}}
+                ></div>
+              </div>
+              
+              <div className="flex items-center gap-2 text-sm text-gray-600 progress-stage-indicator">
+                {uploadProgress < 100 ? (
+                  <>
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                    <span>{processingStage}</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-4 h-4 text-green-500" />
+                    <span className="text-green-600 font-medium">{processingStage}</span>
+                  </>
+                )}
+              </div>
+              
+              {/* Progress stages indicator */}
+              <div className="mt-4 grid grid-cols-4 gap-2">
+                <div className={`text-center p-2 rounded-lg transition-all duration-300 ${uploadProgress >= 25 ? 'bg-green-100 text-green-700 shadow-sm' : 'bg-gray-100 text-gray-500'}`}>
+                  <div className="text-xs font-medium">File Reading</div>
+                  <div className="text-xs">0-25%</div>
+                  {uploadProgress >= 25 && <div className="text-xs mt-1">✓</div>}
+                </div>
+                <div className={`text-center p-2 rounded-lg transition-all duration-300 ${uploadProgress >= 50 ? 'bg-green-100 text-green-700 shadow-sm' : 'bg-gray-100 text-gray-500'}`}>
+                  <div className="text-xs font-medium">CSV Parsing</div>
+                  <div className="text-xs">25-50%</div>
+                  {uploadProgress >= 50 && <div className="text-xs mt-1">✓</div>}
+                </div>
+                <div className={`text-center p-2 rounded-lg transition-all duration-300 ${uploadProgress >= 70 ? 'bg-green-100 text-green-700 shadow-sm' : 'bg-gray-100 text-gray-500'}`}>
+                  <div className="text-xs font-medium">Data Structure</div>
+                  <div className="text-xs">50-70%</div>
+                  {uploadProgress >= 70 && <div className="text-xs mt-1">✓</div>}
+                </div>
+                <div className={`text-center p-2 rounded-lg transition-all duration-300 ${uploadProgress >= 100 ? 'bg-green-100 text-green-700 shadow-sm' : 'bg-gray-100 text-gray-500'}`}>
+                  <div className="text-xs font-medium">Analysis</div>
+                  <div className="text-xs">70-100%</div>
+                  {uploadProgress >= 100 && <div className="text-xs mt-1">✓</div>}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Available Algorithms Section */}
@@ -1518,40 +1668,97 @@ const MLAnalyticsDashboard = () => {
                   {visualizationCategories[selectedVisualizationType]?.charts[selectedChartType]?.name || 'Chart'}
                 </h3>
                 
+                {/* Axis Selection Controls */}
+                {(selectedChartType === 'bar' || selectedChartType === 'column' || selectedChartType === 'line' || selectedChartType === 'scatter' || selectedChartType === 'radar') && (
+                  <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-6 mb-6 border border-blue-200">
+                    <h4 className="text-lg font-medium text-gray-900 mb-4 flex items-center gap-2">
+                      <Settings className="w-5 h-5 text-blue-600" />
+                      Chart Configuration
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          X-Axis (Horizontal) 📊
+                        </label>
+                        <select
+                          value={selectedXAxis}
+                          onChange={(e) => setSelectedXAxis(e.target.value)}
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm"
+                        >
+                          <option value="">-- Select X-Axis Column --</option>
+                          {columns.map(col => (
+                            <option key={col} value={col}>
+                              {col} 
+                              {(() => {
+                                const sampleValue = data[0]?.[col];
+                                const isNumeric = !isNaN(parseFloat(sampleValue));
+                                return isNumeric ? ' (📈 Numeric)' : ' (📝 Text)';
+                              })()}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Y-Axis (Vertical) 📈
+                        </label>
+                        <select
+                          value={selectedYAxis}
+                          onChange={(e) => setSelectedYAxis(e.target.value)}
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm"
+                        >
+                          <option value="">-- Select Y-Axis Column --</option>
+                          {columns.map(col => (
+                            <option key={col} value={col}>
+                              {col}
+                              {(() => {
+                                const sampleValue = data[0]?.[col];
+                                const isNumeric = !isNaN(parseFloat(sampleValue));
+                                return isNumeric ? ' (📈 Numeric)' : ' (📝 Text)';
+                              })()}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="mt-4 p-3 bg-blue-100 rounded-lg">
+                      <p className="text-sm text-blue-800">
+                        💡 <strong>Tip:</strong> Choose which columns to display on the X and Y axes of your chart. 
+                        For best results, use categorical data for X-axis and numeric data for Y-axis.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                
                 {/* Render Chart Based on Selected Type */}
                 {(() => {
-                  // Point 12: System can analyze data and display charts accurately
-                  // Point 12: Primary key, unique key, or id should be used as X-axis
-                  const identifierCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'identifier');
-                  const numericCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'numeric');
-                  const categoricalCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'categorical');
-                  const binaryCols = Object.keys(analysis.stats).filter(col => analysis.stats[col]?.type === 'binary');
+                  // Use user-selected axes or fall back to automatic selection
+                  const xAxisCol = selectedXAxis || columns[0];
+                  const yAxisCol = selectedYAxis || columns[1];
                   
-                  // Determine X and Y axes based on data types and chart requirements
-                  let xAxisCol, yAxisCol, colorCol;
+                  // Get column types for better chart handling
+                  const numericCols = columns.filter(col => {
+                    const sampleValues = data.slice(0, 10).map(row => row[col]).filter(val => val !== null && val !== undefined);
+                    return sampleValues.length > 0 && sampleValues.every(val => !isNaN(parseFloat(val)));
+                  });
                   
-                  // Priority for X-axis: identifier > categorical > binary > numeric
-                  if (identifierCols.length > 0) {
-                    xAxisCol = identifierCols[0];
-                  } else if (categoricalCols.length > 0) {
-                    xAxisCol = categoricalCols[0];
-                  } else if (binaryCols.length > 0) {
-                    xAxisCol = binaryCols[0];
-                  } else {
-                    xAxisCol = numericCols[0];
+                  // Use categorical detection from backend if available, otherwise use local logic
+                  let categoricalCols = columns.filter(col => !numericCols.includes(col));
+                  if (analysis?.data_types?.categorical_analysis) {
+                    categoricalCols = analysis.data_types.categorical_analysis.map(col => col.column);
                   }
                   
-                  // Y-axis should be numeric for most charts
-                  yAxisCol = numericCols.find(col => col !== xAxisCol) || numericCols[0];
-                  
-                  // Color grouping column (for multi-series charts)
-                  colorCol = categoricalCols.find(col => col !== xAxisCol) || binaryCols.find(col => col !== xAxisCol);
-                  
-                  const chartData = data.slice(0, 50).map(row => ({
-                    [xAxisCol]: row[xAxisCol],
-                    [yAxisCol]: parseFloat(row[yAxisCol]) || 0,
-                    ...(colorCol && { [colorCol]: row[colorCol] })
-                  }));
+                  // Prepare chart data
+                  const chartData = data.slice(0, 50).map((row, index) => {
+                    const xValue = row[xAxisCol];
+                    const yValue = numericCols.includes(yAxisCol) ? parseFloat(row[yAxisCol]) || 0 : row[yAxisCol];
+                    
+                    return {
+                      [xAxisCol]: xValue,
+                      [yAxisCol]: yValue,
+                      index: index
+                    };
+                  }).filter(item => item[xAxisCol] !== null && item[xAxisCol] !== undefined);
                   
                   // Comparison Charts
                   if (selectedVisualizationType === 'comparison') {
@@ -1559,7 +1766,7 @@ const MLAnalyticsDashboard = () => {
                       return (
                         <div>
                           <p className="text-sm text-gray-600 mb-4">
-                            Comparing {yAxisCol} by {xAxisCol} {identifierCols.includes(xAxisCol) ? '(ID as X-axis)' : ''}
+                            Comparing {yAxisCol} by {xAxisCol}
                           </p>
                           <ResponsiveContainer width="100%" height={350}>
                             <BarChart data={chartData}>
@@ -1590,6 +1797,154 @@ const MLAnalyticsDashboard = () => {
                               />
                             </BarChart>
                           </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                    
+                    if (selectedChartType === 'column' && xAxisCol && yAxisCol) {
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Column Chart: {yAxisCol} by {xAxisCol}
+                          </p>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <BarChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis 
+                                dataKey={xAxisCol} 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                                angle={-45}
+                                textAnchor="end"
+                                height={100}
+                              />
+                              <YAxis 
+                                tick={{fontSize: 12}}
+                                stroke="#6B7280"
+                              />
+                              <Tooltip 
+                                contentStyle={{
+                                  backgroundColor: 'white',
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: '8px'
+                                }}
+                              />
+                              <Bar 
+                                dataKey={yAxisCol} 
+                                fill="#10B981"
+                                radius={[4, 4, 0, 0]}
+                              />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      );
+                    }
+                    
+                    if (selectedChartType === 'radar' && numericCols.length >= 3) {
+                      // For radar chart, we need multiple numeric dimensions
+                      const radarData = data.slice(0, 10).map((row, index) => {
+                        const dataPoint = { 
+                          name: row[xAxisCol] || `Item ${index + 1}`,
+                          fullMark: 100 // Maximum value for radar chart
+                        };
+                        
+                        // Normalize numeric values to 0-100 scale for better visualization
+                        numericCols.slice(0, 6).forEach(col => {
+                          const value = parseFloat(row[col]) || 0;
+                          const columnValues = data.map(r => parseFloat(r[col])).filter(v => !isNaN(v));
+                          const max = Math.max(...columnValues);
+                          const min = Math.min(...columnValues);
+                          const normalized = max > min ? ((value - min) / (max - min)) * 100 : 50;
+                          dataPoint[col] = Math.round(normalized);
+                        });
+                        return dataPoint;
+                      });
+                      
+                      return (
+                        <div>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Radar Chart: Multi-dimensional comparison using {numericCols.slice(0, 6).join(', ')}
+                          </p>
+                          
+                          {/* Item selector for radar chart */}
+                          <div className="mb-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Select item to visualize:
+                            </label>
+                            <select
+                              value={selectedRadarItem}
+                              onChange={(e) => setSelectedRadarItem(parseInt(e.target.value))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                            >
+                              {radarData.map((item, index) => (
+                                <option key={index} value={index}>{item.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          
+                          <ResponsiveContainer width="100%" height={400}>
+                            <RadarChart data={radarData[selectedRadarItem] ? [radarData[selectedRadarItem]] : []}>
+                              <PolarGrid stroke="#E5E7EB" />
+                              <PolarAngleAxis 
+                                dataKey="name" 
+                                tick={{fontSize: 12, fill: '#6B7280'}}
+                              />
+                              <PolarRadiusAxis 
+                                angle={90} 
+                                domain={[0, 100]}
+                                tick={{fontSize: 10, fill: '#9CA3AF'}}
+                              />
+                              {numericCols.slice(0, 6).map((col, index) => (
+                                <Radar
+                                  key={col}
+                                  name={col}
+                                  dataKey={col}
+                                  stroke={`hsl(${index * 60}, 70%, 50%)`}
+                                  fill={`hsl(${index * 60}, 70%, 50%)`}
+                                  fillOpacity={0.1}
+                                  strokeWidth={2}
+                                />
+                              ))}
+                              <Tooltip 
+                                contentStyle={{
+                                  backgroundColor: 'white',
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: '8px'
+                                }}
+                              />
+                            </RadarChart>
+                          </ResponsiveContainer>
+                          
+                          {/* Data table for radar chart */}
+                          <div className="mt-6 overflow-x-auto">
+                            <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Item</th>
+                                  {numericCols.slice(0, 6).map(col => (
+                                    <th key={col} className="px-4 py-2 text-left text-sm font-medium text-gray-700">{col}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {radarData.map((item, index) => (
+                                  <tr key={index} className={`border-t border-gray-200 ${index === selectedRadarItem ? 'bg-purple-50' : ''}`}>
+                                    <td className="px-4 py-2 text-sm text-gray-900 font-medium">
+                                      {item.name}
+                                      {index === selectedRadarItem && <span className="ml-2 text-purple-600">◄ Selected</span>}
+                                    </td>
+                                    {numericCols.slice(0, 6).map(col => (
+                                      <td key={col} className="px-4 py-2 text-sm text-gray-900">
+                                        {data[index] && data[index][col] !== null && data[index][col] !== undefined 
+                                          ? parseFloat(data[index][col]).toFixed(2) 
+                                          : 'N/A'}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       );
                     }
@@ -1767,11 +2122,27 @@ const MLAnalyticsDashboard = () => {
                   // Default message for unsupported chart types
                   return (
                     <div className="text-center py-12 text-gray-500">
-                      <div className="text-lg mb-2">Chart visualization coming soon!</div>
-                      <div className="text-sm">
+                      <div className="text-6xl mb-4">📊</div>
+                      <div className="text-lg mb-2 font-medium">Chart Implementation Available!</div>
+                      <div className="text-sm mb-4">
                         {visualizationCategories[selectedVisualizationType]?.charts[selectedChartType]?.name} 
-                        visualization will be implemented in future updates.
+                        is ready to use with your dataset.
                       </div>
+                      {selectedChartType === 'radar' && numericCols.length < 3 && (
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800 max-w-md mx-auto">
+                          <div className="text-sm">
+                            <strong>Note:</strong> Radar charts require at least 3 numeric columns in your dataset.
+                            Currently available: {numericCols.length} numeric columns.
+                          </div>
+                        </div>
+                      )}
+                      {(!selectedXAxis || !selectedYAxis) && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-blue-800 max-w-md mx-auto mt-4">
+                          <div className="text-sm">
+                            <strong>Configure Chart:</strong> Please select X and Y axis columns above to display the chart.
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
