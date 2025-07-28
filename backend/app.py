@@ -248,6 +248,85 @@ def get_model_algorithms():
         }
     }
 
+def detect_categorical_columns(df):
+    """
+    Enhanced detection for categorical columns with detailed analysis
+    """
+    categorical_columns = []
+    
+    for col in df.columns:
+        unique_count = df[col].nunique()
+        total_rows = len(df)
+        
+        # Skip completely empty columns
+        if unique_count == 0:
+            continue
+            
+        # Calculate uniqueness ratio
+        uniqueness_ratio = unique_count / total_rows if total_rows > 0 else 0
+        
+        # Determine if column is categorical based on multiple criteria
+        is_categorical = False
+        categorical_type = 'unknown'
+        reasons = []
+        
+        # 1. Object/string columns are typically categorical
+        if df[col].dtype == 'object':
+            is_categorical = True
+            categorical_type = 'text_based'
+            reasons.append('String/object data type')
+        
+        # 2. Low uniqueness ratio suggests categorical
+        elif uniqueness_ratio < 0.05:  # Less than 5% unique values
+            is_categorical = True
+            categorical_type = 'low_cardinality'
+            reasons.append(f'Low uniqueness ratio ({uniqueness_ratio:.3f})')
+        
+        # 3. Small number of unique values regardless of type
+        elif unique_count <= 20:  # 20 or fewer unique values
+            is_categorical = True
+            categorical_type = 'small_unique_count'
+            reasons.append(f'Small number of unique values ({unique_count})')
+        
+        # 4. Integer columns with reasonable cardinality
+        elif df[col].dtype in ['int64', 'int32'] and unique_count <= 50:
+            is_categorical = True
+            categorical_type = 'integer_categorical'
+            reasons.append(f'Integer with moderate cardinality ({unique_count})')
+        
+        # 5. Boolean columns
+        elif df[col].dtype == 'bool':
+            is_categorical = True
+            categorical_type = 'boolean'
+            reasons.append('Boolean data type')
+        
+        if is_categorical:
+            # Get value counts for the top categories
+            value_counts = df[col].value_counts().head(10)
+            
+            # Calculate some statistics
+            mode_value = df[col].mode().iloc[0] if len(df[col].mode()) > 0 else None
+            mode_frequency = value_counts.iloc[0] if len(value_counts) > 0 else 0
+            mode_percentage = (mode_frequency / total_rows) * 100 if total_rows > 0 else 0
+            
+            categorical_columns.append({
+                'column': col,
+                'categorical_type': categorical_type,
+                'unique_count': unique_count,
+                'uniqueness_ratio': uniqueness_ratio,
+                'data_type': str(df[col].dtype),
+                'reasons': reasons,
+                'top_values': value_counts.to_dict(),
+                'mode_value': mode_value,
+                'mode_frequency': mode_frequency,
+                'mode_percentage': mode_percentage,
+                'null_count': df[col].isnull().sum(),
+                'null_percentage': (df[col].isnull().sum() / total_rows) * 100 if total_rows > 0 else 0,
+                'recommendation': f'Categorical column suitable for grouping, encoding, and classification tasks'
+            })
+    
+    return categorical_columns
+
 def detect_binary_columns(df):
     """Detect binary columns (0/1) with strict binary recognition"""
     binary_columns = []
@@ -766,6 +845,7 @@ def generate_enhanced_data_quality_report(df):
             'numeric_columns': list(df.select_dtypes(include=[np.number]).columns),
             'categorical_columns': list(df.select_dtypes(include=['object']).columns),
             'binary_columns': detect_binary_columns(df),
+            'categorical_analysis': detect_categorical_columns(df),
             'primary_key_candidates': detect_primary_key_columns(df)
         },
         'data_quality': {
@@ -1112,6 +1192,268 @@ def evaluate_model_performance(model, X_test, y_test, model_type):
         'feature_importance': feature_importance.tolist() if feature_importance is not None else None,
         'prediction_probabilities': prediction_proba.tolist() if prediction_proba is not None else None
     }
+
+@app.route('/api/detect-categorical', methods=['POST'])
+def detect_categorical():
+    """API endpoint to detect categorical columns in provided data"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Detect categorical columns
+        categorical_columns = detect_categorical_columns(df)
+        
+        # Also detect binary columns as they are a subset of categorical
+        binary_columns = detect_binary_columns(df)
+        
+        result = {
+            'categorical_columns': categorical_columns,
+            'binary_columns': binary_columns,
+            'total_columns': len(df.columns),
+            'categorical_count': len(categorical_columns),
+            'binary_count': len(binary_columns),
+            'summary': {
+                'description': 'Categorical column detection completed',
+                'methodology': [
+                    'String/object data types',
+                    'Low uniqueness ratio (<5%)',
+                    'Small unique value count (≤20)',
+                    'Integer columns with moderate cardinality (≤50)',
+                    'Boolean data types'
+                ]
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Categorical detection failed: {str(e)}'}), 500
+
+@app.route('/api/detect-binary', methods=['POST'])
+def detect_binary():
+    """API endpoint to detect binary columns in provided data"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Detect binary columns
+        binary_columns = detect_binary_columns(df)
+        
+        result = {
+            'binary_columns': binary_columns,
+            'total_columns': len(df.columns),
+            'binary_count': len(binary_columns),
+            'summary': {
+                'description': 'Binary column detection completed',
+                'types_detected': [
+                    'Numeric binary (0/1)',
+                    'Boolean (True/False)',
+                    'Yes/No patterns',
+                    'Gender (Male/Female)',
+                    'Status (Active/Inactive)',
+                    'Pass/Fail patterns'
+                ]
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Binary detection failed: {str(e)}'}), 500
+
+@app.route('/api/detect-primary-key', methods=['POST'])
+def detect_primary_key():
+    """API endpoint to detect primary key columns in provided data"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Detect primary key columns
+        primary_key_candidates = detect_primary_key_columns(df)
+        
+        result = {
+            'primary_key_candidates': primary_key_candidates,
+            'total_columns': len(df.columns),
+            'candidate_count': len(primary_key_candidates),
+            'summary': {
+                'description': 'Primary key detection completed',
+                'criteria': [
+                    'High uniqueness ratio (>80%)',
+                    'ID-like naming patterns',
+                    'Sequential value patterns',
+                    'Minimal null values',
+                    'Appropriate data types'
+                ]
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Primary key detection failed: {str(e)}'}), 500
+
+@app.route('/api/data-integration', methods=['POST'])
+def perform_data_integration_api():
+    """API endpoint for data integration analysis"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Perform data integration analysis
+        integration_report = perform_data_integration(df)
+        
+        result = {
+            'integration_report': integration_report,
+            'dataset_info': {
+                'rows': len(df),
+                'columns': len(df.columns),
+                'column_names': list(df.columns)
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Data integration analysis failed: {str(e)}'}), 500
+
+@app.route('/api/data-transformation', methods=['POST'])
+def perform_data_transformation_api():
+    """API endpoint for data transformation"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Get transformation options from request
+        transformation_options = data.get('transformation_options', {})
+        
+        # Perform data transformation
+        transformed_df, transformation_report = perform_data_transformation(df, transformation_options)
+        
+        # Convert transformed data back to records
+        transformed_data = transformed_df.to_dict('records')
+        
+        # Convert numpy types for JSON serialization
+        for row in transformed_data:
+            for key, value in row.items():
+                if isinstance(value, (np.integer, np.floating, np.bool_)):
+                    row[key] = value.item()
+                elif pd.isna(value):
+                    row[key] = None
+        
+        result = {
+            'transformed_data': transformed_data,
+            'transformation_report': transformation_report,
+            'original_shape': df.shape,
+            'transformed_shape': transformed_df.shape,
+            'columns': list(transformed_df.columns)
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Data transformation failed: {str(e)}'}), 500
+
+@app.route('/api/data-reduction', methods=['POST'])
+def perform_data_reduction_api():
+    """API endpoint for data reduction"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Get reduction options from request
+        reduction_options = data.get('reduction_options', {})
+        
+        # Perform data reduction
+        reduced_df, reduction_report = perform_data_reduction(df, reduction_options)
+        
+        # Convert reduced data back to records
+        reduced_data = reduced_df.to_dict('records')
+        
+        # Convert numpy types for JSON serialization
+        for row in reduced_data:
+            for key, value in row.items():
+                if isinstance(value, (np.integer, np.floating, np.bool_)):
+                    row[key] = value.item()
+                elif pd.isna(value):
+                    row[key] = None
+        
+        result = {
+            'reduced_data': reduced_data,
+            'reduction_report': reduction_report,
+            'original_shape': df.shape,
+            'reduced_shape': reduced_df.shape,
+            'columns': list(reduced_df.columns),
+            'reduction_summary': {
+                'rows_reduced': df.shape[0] - reduced_df.shape[0],
+                'columns_reduced': df.shape[1] - reduced_df.shape[1],
+                'size_reduction_percentage': ((df.shape[0] * df.shape[1] - reduced_df.shape[0] * reduced_df.shape[1]) / (df.shape[0] * df.shape[1])) * 100
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Data reduction failed: {str(e)}'}), 500
 
 @app.route('/api/algorithms', methods=['GET'])
 def get_algorithms():
