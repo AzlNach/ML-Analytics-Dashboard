@@ -3,8 +3,23 @@ node_modules/
 /.pnp
 .pnp.js
 
+# Python Virtual Environment
+venv311/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
 # Production build
 /build
+/dist
 
 # Environment variables
 .env
@@ -12,16 +27,35 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+backend/.env
 
 # Logs
+logs/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# ML Models and Data (Large Files)
+backend/models/*.pkl
+models/*.pkl
+*.h5
+*.joblib
+
+# Training Data and Uploads
+backend/uploads/
+backend/data/
+uploads/
+data/cleaned/
+data/reports/
+temp/
+temporary/
+
 # Package manager files
 package-lock.json
 yarn.lock
+Pipfile.lock
 
 # Runtime data
 pids
@@ -40,6 +74,13 @@ coverage/
 *.swo
 *~
 
+# VS Code specific (keep settings but ignore workspace files)
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.vscode/tasks.json
+.vscode/*.code-workspace
+
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -48,10 +89,18 @@ coverage/
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
 # Temporary files
 *.tmp
 *.temp
+*.cache
+.cache/
+
+# Testing and Coverage
+coverage/
+*.lcov
+.nyc_output/
 
 # ESLint cache
 .eslintcache
@@ -71,6 +120,25 @@ Thumbs.db
 # Backup files
 *.backup
 *.bak
+*.orig
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Configuration files (keep examples)
+config.json
+config.yml
+!config.example.json
+!config.example.yml
+
+# Docker
+.dockerignore
+Dockerfile.prod
 
 # Local development files
-.cache/
+node_modules
+
+
+training_data

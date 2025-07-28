@@ -15,6 +15,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 import joblib
 import warnings
+import re
+import ast
+
+from ydata_profiling import ProfileReport
 warnings.filterwarnings('ignore')
 
 def clean_complex_types(value, row_index=None, column_key=None):
@@ -248,263 +252,498 @@ def get_model_algorithms():
         }
     }
 
-def detect_categorical_columns(df):
+def detect_data_types(df):
     """
-    Enhanced detection for categorical columns with detailed analysis
-    """
-    categorical_columns = []
+    Deteksi tipe data otomatis menggunakan YData Profiling
     
-    for col in df.columns:
-        unique_count = df[col].nunique()
-        total_rows = len(df)
+    Returns:
+        dict: Dictionary berisi informasi lengkap tentang setiap kolom termasuk:
+              - Tipe data (numeric, categorical, boolean, datetime, unique)
+              - Analisis kardinalitas
+              - Identifikasi kolom unik/identifier
+              - Statistik deskriptif
+    """
+    print("🔍 Menggunakan YData Profiling untuk deteksi tipe data otomatis...")
+    
+    try:
+        # Buat profile report dengan konfigurasi minimal untuk performa
+        profile = ProfileReport(
+            df, 
+            title="Data Type Detection with YData Profiling",
+            minimal=True,  # Mode minimal untuk performa lebih cepat
+            explorative=False,  # Nonaktifkan analisis eksploratif
+            dark_mode=False,
+            progress_bar=False,
+            infer_dtypes=True,  # Aktifkan inferensi tipe data otomatis
+            vars={
+                'num': {'low_categorical_threshold': 0},  # Hindari false positive categorical
+                'cat': {'cardinality_threshold': 50},     # Threshold untuk kategori
+                'bool': {'imbalance_threshold': 0.9},     # Threshold untuk boolean imbalance
+            }
+        )
         
-        # Skip completely empty columns
-        if unique_count == 0:
-            continue
+        # Ekstrak informasi tipe data dari profile
+        result = {
+            'numeric_columns': [],
+            'categorical_columns': [],
+            'binary_columns': [],
+            'date_columns': [],
+            'string_columns': [],
+            'identifier_columns': [],
+            'foreign_key_columns': [],
+            'summary': {
+                'total_columns': len(df.columns),
+                'data_types_detected': {},
+                'recommendations': []
+            }
+        }
+        
+        # Dapatkan informasi dari profile
+        variables_info = profile.get_description()['variables']
+        
+        for column_name, column_info in variables_info.items():
+            col_type = column_info.get('type', 'unknown')
+            unique_count = column_info.get('n_unique', 0)
+            total_rows = len(df)
+            uniqueness_ratio = unique_count / total_rows if total_rows > 0 else 0
             
-        # Calculate uniqueness ratio
-        uniqueness_ratio = unique_count / total_rows if total_rows > 0 else 0
-        
-        # Determine if column is categorical based on multiple criteria
-        is_categorical = False
-        categorical_type = 'unknown'
-        reasons = []
-        
-        # 1. Object/string columns are typically categorical
-        if df[col].dtype == 'object':
-            is_categorical = True
-            categorical_type = 'text_based'
-            reasons.append('String/object data type')
-        
-        # 2. Low uniqueness ratio suggests categorical
-        elif uniqueness_ratio < 0.05:  # Less than 5% unique values
-            is_categorical = True
-            categorical_type = 'low_cardinality'
-            reasons.append(f'Low uniqueness ratio ({uniqueness_ratio:.3f})')
-        
-        # 3. Small number of unique values regardless of type
-        elif unique_count <= 20:  # 20 or fewer unique values
-            is_categorical = True
-            categorical_type = 'small_unique_count'
-            reasons.append(f'Small number of unique values ({unique_count})')
-        
-        # 4. Integer columns with reasonable cardinality
-        elif df[col].dtype in ['int64', 'int32'] and unique_count <= 50:
-            is_categorical = True
-            categorical_type = 'integer_categorical'
-            reasons.append(f'Integer with moderate cardinality ({unique_count})')
-        
-        # 5. Boolean columns
-        elif df[col].dtype == 'bool':
-            is_categorical = True
-            categorical_type = 'boolean'
-            reasons.append('Boolean data type')
-        
-        if is_categorical:
-            # Get value counts for the top categories
-            value_counts = df[col].value_counts().head(10)
-            
-            # Calculate some statistics
-            mode_value = df[col].mode().iloc[0] if len(df[col].mode()) > 0 else None
-            mode_frequency = value_counts.iloc[0] if len(value_counts) > 0 else 0
-            mode_percentage = (mode_frequency / total_rows) * 100 if total_rows > 0 else 0
-            
-            categorical_columns.append({
-                'column': col,
-                'categorical_type': categorical_type,
+            # Dapatkan statistik tambahan
+            stats = {
                 'unique_count': unique_count,
                 'uniqueness_ratio': uniqueness_ratio,
-                'data_type': str(df[col].dtype),
-                'reasons': reasons,
-                'top_values': value_counts.to_dict(),
-                'mode_value': mode_value,
-                'mode_frequency': mode_frequency,
-                'mode_percentage': mode_percentage,
-                'null_count': df[col].isnull().sum(),
-                'null_percentage': (df[col].isnull().sum() / total_rows) * 100 if total_rows > 0 else 0,
-                'recommendation': f'Categorical column suitable for grouping, encoding, and classification tasks'
-            })
-    
-    return categorical_columns
-
-def detect_binary_columns(df):
-    """Detect binary columns (0/1) with strict binary recognition"""
-    binary_columns = []
-    for col in df.columns:
-        # Filter Awal: Periksa Jumlah Nilai Unik
-        unique_count = df[col].nunique()
-        
-        # Jika lebih dari 2 nilai unik, bukan binary
-        if unique_count > 2:
-            continue
-        
-        # Jika tepat 2 nilai unik, periksa apa saja kedua nilai tersebut
-        if unique_count == 2:
-            unique_vals = df[col].dropna().unique()
-            unique_set = set(unique_vals)
+                'missing_count': column_info.get('n_missing', 0),
+                'missing_percentage': (column_info.get('n_missing', 0) / total_rows) * 100 if total_rows > 0 else 0,
+                'data_type': str(df[column_name].dtype),
+                'memory_size': column_info.get('memory_size', 0)
+            }
             
-            # ✅ Strict binary check: Jika set nilainya adalah persis {0, 1}
-            is_strict_binary = unique_set == {0, 1} or unique_set == {0.0, 1.0}
+            # Deteksi naming patterns untuk membantu klasifikasi
+            col_lower = column_name.lower().strip()
             
-            # Extended binary patterns for data understanding
-            is_extended_binary = (
-                unique_set.issubset({'Yes', 'No', 'yes', 'no', 'Y', 'N', 'y', 'n'}) or
-                unique_set.issubset({'True', 'False', 'true', 'false', 'T', 'F', 't', 'f'}) or
-                unique_set.issubset({'Male', 'Female', 'male', 'female', 'M', 'F', 'm', 'f'}) or
-                unique_set.issubset({'Active', 'Inactive', 'active', 'inactive'}) or
-                unique_set.issubset({'Pass', 'Fail', 'pass', 'fail'}) or
-                unique_set.issubset({True, False})
-            )
+            # Pattern untuk identifikasi foreign key
+            fk_patterns = [
+                r'.*_id$', r'^id_.*', r'.*code$', r'^code.*',
+                r'.*ref$', r'^ref.*', r'.*key$', r'^key.*',
+                r'.*partner.*id.*', r'.*store.*id.*', r'.*customer.*id.*'
+            ]
+            has_fk_pattern = any(re.match(pattern, col_lower) for pattern in fk_patterns)
             
-            if is_strict_binary or is_extended_binary:
-                binary_columns.append({
-                    'column': col,
-                    'values': list(unique_set),
-                    'is_strict_binary': is_strict_binary,
-                    'is_extended_binary': is_extended_binary,
-                    'binary_type': determine_binary_type(unique_set),
-                    'unique_count': unique_count,
-                    'recommendation': 'Kolom biner - tidak berlaku untuk Mean, Std Dev, Min, Max'
+            # Pattern untuk identifikasi identifier/primary key
+            id_patterns = [
+                r'.*id$', r'^id.*', r'.*_id$', r'^id_.*',
+                r'.*no$', r'^no.*', r'.*number$', r'^number.*'
+            ]
+            has_id_pattern = any(re.match(pattern, col_lower) for pattern in id_patterns)
+            
+            # Pattern untuk identifikasi date
+            date_patterns = [
+                r'.*date.*', r'.*time.*', r'.*created.*', r'.*updated.*',
+                r'.*delivery.*', r'.*timestamp.*', r'.*datetime.*'
+            ]
+            has_date_pattern = any(re.match(pattern, col_lower) for pattern in date_patterns)
+            
+            # Klasifikasi berdasarkan YData Profiling type dan analisis tambahan
+            if col_type == 'Numeric':
+                # Deteksi apakah ini identifier/unique column
+                if uniqueness_ratio > 0.95 and has_id_pattern:
+                    result['identifier_columns'].append({
+                        'column': column_name,
+                        'identifier_type': 'primary_key' if uniqueness_ratio == 1.0 else 'unique_identifier',
+                        'confidence_score': min(0.95, uniqueness_ratio + 0.05),
+                        'reasons': ['High uniqueness ratio from YData Profiling', f'Uniqueness: {uniqueness_ratio:.3f}', 'ID naming pattern'],
+                        'recommendation': 'Primary key or unique identifier - exclude from ML features',
+                        **stats
+                    })
+                elif has_fk_pattern and 0.01 < uniqueness_ratio < 0.8:
+                    # Foreign key detection dengan YData Profiling
+                    confidence = 0.7 + (0.2 if has_fk_pattern else 0)
+                    result['foreign_key_columns'].append({
+                        'column': column_name,
+                        'confidence_score': confidence,
+                        'uniqueness_ratio': uniqueness_ratio,
+                        'has_fk_pattern': has_fk_pattern,
+                        'reasons': ['Numeric with moderate cardinality from YData Profiling', 'FK naming pattern detected'],
+                        'recommendation': 'Foreign key reference - encode for ML if needed',
+                        **stats
+                    })
+                else:
+                    # True numeric column
+                    numeric_type = 'continuous'
+                    reasons = ['Detected as Numeric by YData Profiling']
+                    
+                    # Enhanced pattern recognition
+                    if any(pattern in col_lower for pattern in ['price', 'amount', 'total', 'balance', 'income', 'cost', 'salary']):
+                        numeric_type = 'monetary'
+                        reasons.append('Monetary pattern detected')
+                    elif any(pattern in col_lower for pattern in ['age', 'year', 'count', 'quantity', 'weight', 'height']):
+                        numeric_type = 'measured_value'
+                        reasons.append('Measured value pattern detected')
+                    elif any(pattern in col_lower for pattern in ['percent', 'rate', 'ratio', 'score']):
+                        numeric_type = 'percentage_or_ratio'
+                        reasons.append('Percentage/ratio pattern detected')
+                    
+                    result['numeric_columns'].append({
+                        'column': column_name,
+                        'numeric_type': numeric_type,
+                        'reasons': reasons,
+                        'is_continuous': unique_count > 20,
+                        'stats': {
+                            'mean': float(df[column_name].mean()) if not df[column_name].isna().all() else None,
+                            'std': float(df[column_name].std()) if not df[column_name].isna().all() else None,
+                            'min': float(df[column_name].min()) if not df[column_name].isna().all() else None,
+                            'max': float(df[column_name].max()) if not df[column_name].isna().all() else None,
+                            'median': float(df[column_name].median()) if not df[column_name].isna().all() else None
+                        },
+                        'recommendation': 'Numeric column suitable for mathematical operations and regression',
+                        **stats
+                    })
+            
+            elif col_type == 'Categorical':
+                # Enhanced binary detection
+                if unique_count == 2:
+                    unique_values = df[column_name].dropna().unique().tolist()
+                    binary_type = determine_binary_type_ydata(set(unique_values))
+                    
+                    result['binary_columns'].append({
+                        'column': column_name,
+                        'binary_type': binary_type,
+                        'unique_values': unique_values,
+                        'is_strict_binary': True,
+                        'reasons': ['Detected as binary by YData Profiling', f'Exactly 2 unique values: {unique_values}'],
+                        'recommendation': 'Binary column - encode as 0/1 for ML',
+                        **stats
+                    })
+                else:
+                    # Enhanced categorical analysis
+                    categorical_type = 'low_cardinality' if unique_count <= 10 else 'moderate_cardinality' if unique_count <= 50 else 'high_cardinality'
+                    value_counts = df[column_name].value_counts().head(10)
+                    
+                    # Check for ordinal patterns
+                    is_ordinal = False
+                    ordinal_patterns = ['low', 'medium', 'high', 'small', 'large', 'good', 'better', 'best']
+                    values_str = [str(v).lower() for v in unique_values[:10]]
+                    if any(pattern in ' '.join(values_str) for pattern in ordinal_patterns):
+                        is_ordinal = True
+                    
+                    result['categorical_columns'].append({
+                        'column': column_name,
+                        'categorical_type': categorical_type,
+                        'is_ordinal': is_ordinal,
+                        'cardinality': unique_count,
+                        'reasons': ['Detected as Categorical by YData Profiling'],
+                        'top_values': value_counts.to_dict(),
+                        'mode_value': df[column_name].mode().iloc[0] if len(df[column_name].mode()) > 0 else None,
+                        'recommendation': f'Categorical column ({categorical_type}) - suitable for encoding and classification',
+                        **stats
+                    })
+            
+            elif col_type == 'DateTime' or has_date_pattern:
+                # Enhanced date/time detection
+                sample_values = df[column_name].dropna().head(3).astype(str).tolist()
+                
+                # Detect date format
+                date_format = 'unknown'
+                if any('T' in str(val) for val in sample_values):
+                    date_format = 'ISO_8601'
+                elif any('/' in str(val) for val in sample_values):
+                    date_format = 'MM/DD/YYYY_or_DD/MM/YYYY'
+                elif any('-' in str(val) for val in sample_values):
+                    date_format = 'YYYY-MM-DD'
+                
+                result['date_columns'].append({
+                    'column': column_name,
+                    'date_format_type': date_format,
+                    'has_time_component': any(':' in str(val) for val in sample_values),
+                    'reasons': ['Detected as DateTime by YData Profiling'] if col_type == 'DateTime' else ['Date pattern in column name'],
+                    'sample_values': sample_values,
+                    'recommendation': 'Date/time column - extract features like year, month, day for ML',
+                    **stats
                 })
-    
-    return binary_columns
+            
+            elif col_type == 'Text':
+                # Enhanced text analysis
+                sample_values = df[column_name].dropna().head(5).astype(str).tolist()
+                avg_length = df[column_name].astype(str).str.len().mean()
+                max_length = df[column_name].astype(str).str.len().max()
+                
+                # Check for URL pattern
+                is_url = any('http' in str(val) or 'www.' in str(val) for val in sample_values[:3])
+                
+                # Check for email pattern
+                is_email = any('@' in str(val) and '.' in str(val) for val in sample_values[:3])
+                
+                if is_url:
+                    result['string_columns'].append({
+                        'column': column_name,
+                        'string_type': 'url',
+                        'avg_length': avg_length,
+                        'max_length': max_length,
+                        'sample_values': sample_values,
+                        'reasons': ['URL pattern detected by YData Profiling analysis'],
+                        'recommendation': 'URL column - extract domain features if needed for ML',
+                        **stats
+                    })
+                elif is_email:
+                    result['string_columns'].append({
+                        'column': column_name,
+                        'string_type': 'email',
+                        'avg_length': avg_length,
+                        'max_length': max_length,
+                        'sample_values': sample_values,
+                        'reasons': ['Email pattern detected by YData Profiling analysis'],
+                        'recommendation': 'Email column - extract domain features if needed for ML',
+                        **stats
+                    })
+                elif avg_length > 50:  # Long text
+                    result['string_columns'].append({
+                        'column': column_name,
+                        'string_type': 'long_text',
+                        'avg_length': avg_length,
+                        'max_length': max_length,
+                        'sample_values': sample_values,
+                        'reasons': ['Long text detected by YData Profiling', f'Average length: {avg_length:.1f}'],
+                        'recommendation': 'Long text column - suitable for NLP analysis',
+                        **stats
+                    })
+                else:
+                    # Short text - likely categorical
+                    result['categorical_columns'].append({
+                        'column': column_name,
+                        'categorical_type': 'text_based',
+                        'cardinality': unique_count,
+                        'reasons': ['Short text detected by YData Profiling'],
+                        'top_values': df[column_name].value_counts().head(10).to_dict(),
+                        'recommendation': 'Short text categorical - encode for ML',
+                        **stats
+                    })
+            
+            elif col_type == 'Boolean':
+                # Boolean columns
+                unique_values = df[column_name].dropna().unique().tolist()
+                
+                result['binary_columns'].append({
+                    'column': column_name,
+                    'binary_type': 'boolean',
+                    'unique_values': unique_values,
+                    'is_strict_binary': True,
+                    'reasons': ['Detected as Boolean by YData Profiling'],
+                    'recommendation': 'Boolean column - already suitable for ML (0/1)',
+                    **stats
+                })
+            
+            else:
+                # Unknown type - enhanced fallback analysis
+                if uniqueness_ratio > 0.95 and has_id_pattern:
+                    result['identifier_columns'].append({
+                        'column': column_name,
+                        'identifier_type': 'unique_identifier',
+                        'confidence_score': uniqueness_ratio,
+                        'reasons': ['High uniqueness ratio', 'Unknown type by YData Profiling', 'ID naming pattern'],
+                        'recommendation': 'Likely identifier column - exclude from ML features',
+                        **stats
+                    })
+                elif unique_count == 2:
+                    # Treat as binary
+                    unique_values = df[column_name].dropna().unique().tolist()
+                    result['binary_columns'].append({
+                        'column': column_name,
+                        'binary_type': 'unknown_binary',
+                        'unique_values': unique_values,
+                        'is_strict_binary': True,
+                        'reasons': ['2 unique values', 'Unknown type by YData Profiling'],
+                        'recommendation': 'Binary column - encode as 0/1 for ML',
+                        **stats
+                    })
+                else:
+                    # Treat as categorical
+                    result['categorical_columns'].append({
+                        'column': column_name,
+                        'categorical_type': 'unknown',
+                        'cardinality': unique_count,
+                        'reasons': ['Unknown type by YData Profiling', 'Treated as categorical'],
+                        'recommendation': 'Review manually - may need special encoding',
+                        **stats
+                    })
+        
+        # Enhanced summary with YData Profiling insights
+        result['summary']['data_types_detected'] = {
+            'numeric': len(result['numeric_columns']),
+            'categorical': len(result['categorical_columns']),
+            'binary': len(result['binary_columns']),
+            'date': len(result['date_columns']),
+            'string': len(result['string_columns']),
+            'identifier': len(result['identifier_columns']),
+            'foreign_key': len(result['foreign_key_columns'])
+        }
+        
+        result['summary']['recommendations'] = [
+            f"✅ YData Profiling successfully analyzed {len(df.columns)} columns",
+            f"📊 Found {len(result['numeric_columns'])} numeric columns (suitable for regression/correlation)",
+            f"🏷️ Found {len(result['categorical_columns'])} categorical columns (need encoding for ML)",
+            f"⚡ Found {len(result['binary_columns'])} binary columns (encode as 0/1)",
+            f"📅 Found {len(result['date_columns'])} date columns (extract temporal features)",
+            f"📝 Found {len(result['string_columns'])} text columns (consider NLP techniques)",
+            f"🔍 Found {len(result['identifier_columns'])} identifier columns (exclude from ML)",
+            f"🔗 Found {len(result['foreign_key_columns'])} foreign key columns (consider for joins)"
+        ]
+        
+        result['summary']['ydata_profiling_info'] = {
+            'version': 'YData Profiling v4+',
+            'analysis_method': 'Automated statistical analysis with pattern recognition',
+            'confidence_level': 'High - based on statistical properties and naming patterns'
+        }
+        
+        print("✅ YData Profiling analysis completed successfully!")
+        return result
+        
+    except Exception as e:
+        print(f"❌ Error in YData Profiling analysis: {e}")
+        # Fallback ke metode manual jika YData Profiling gagal
+        print("🔄 Falling back to manual detection method...")
+        return detect_data_types_fallback(df)
 
-def determine_binary_type(unique_set):
-    """Determine the type of binary column"""
+def determine_binary_type_ydata(unique_set):
+    """Determine the type of binary column for YData Profiling"""
+    unique_list = list(unique_set)
+    unique_lower = [str(v).lower() for v in unique_list if v is not None]
+    
     if unique_set.issubset({0, 1, '0', '1', 0.0, 1.0}):
         return 'numeric_binary'
     elif unique_set.issubset({True, False}):
         return 'boolean'
-    elif any(v.lower() in ['yes', 'no', 'y', 'n'] for v in unique_set if isinstance(v, str)):
+    elif any(v in ['yes', 'no', 'y', 'n'] for v in unique_lower):
         return 'yes_no'
-    elif any(v.lower() in ['true', 'false', 't', 'f'] for v in unique_set if isinstance(v, str)):
+    elif any(v in ['true', 'false', 't', 'f'] for v in unique_lower):
         return 'true_false'
-    elif any(v.lower() in ['male', 'female', 'm', 'f'] for v in unique_set if isinstance(v, str)):
+    elif any(v in ['male', 'female', 'm', 'f'] for v in unique_lower):
         return 'gender'
-    elif any(v.lower() in ['active', 'inactive'] for v in unique_set if isinstance(v, str)):
+    elif any(v in ['active', 'inactive'] for v in unique_lower):
         return 'status'
-    elif any(v.lower() in ['pass', 'fail'] for v in unique_set if isinstance(v, str)):
-        return 'pass_fail'
     else:
-        return 'other_binary'
+        return 'custom_binary'
 
-def detect_primary_key_columns(df):
-    """Enhanced detection for primary key, unique key, or ID columns"""
-    primary_key_candidates = []
+def detect_data_types_fallback(df):
+    """Fallback method jika YData Profiling gagal - menggunakan deteksi sederhana"""
+    print("🔄 Using fallback method for data type detection...")
+    
+    # Deteksi sederhana berdasarkan tipe data pandas
+    numeric_columns = []
+    categorical_columns = []
+    binary_columns = []
+    date_columns = []
+    string_columns = []
+    identifier_columns = []
+    foreign_key_columns = []
     
     for col in df.columns:
-        # a. Analisis Kardinalitas (Keunikan)
         unique_count = df[col].nunique()
         total_rows = len(df)
         uniqueness_ratio = unique_count / total_rows if total_rows > 0 else 0
         
-        # Skip if too few unique values (likely categorical, not ID)
-        if uniqueness_ratio < 0.8:
-            continue
+        # Numeric columns
+        if df[col].dtype in ['int64', 'float64', 'int32', 'float32']:
+            if uniqueness_ratio > 0.95:
+                identifier_columns.append({
+                    'column': col,
+                    'identifier_type': 'unique_identifier',
+                    'confidence_score': uniqueness_ratio,
+                    'reasons': ['High uniqueness ratio (fallback method)'],
+                    'recommendation': 'Potential identifier column'
+                })
+            elif unique_count == 2:
+                binary_columns.append({
+                    'column': col,
+                    'binary_type': 'numeric_binary',
+                    'unique_values': df[col].dropna().unique().tolist(),
+                    'reasons': ['Exactly 2 unique values (fallback method)'],
+                    'recommendation': 'Binary numeric column'
+                })
+            else:
+                numeric_columns.append({
+                    'column': col,
+                    'numeric_type': 'continuous',
+                    'reasons': ['Numeric data type (fallback method)'],
+                    'recommendation': 'Numeric column for calculations'
+                })
         
-        # b. Analisis Nama Kolom - Cari kata kunci atau pola umum
-        col_lower = col.lower().strip()
-        id_patterns = [
-            r'.*id$', r'^id.*', r'.*_id$', r'^id_.*',  # id patterns
-            r'.*no$', r'^no.*', r'.*_no$', r'^no_.*',  # no/nomor patterns
-            r'.*kd$', r'^kd.*', r'.*_kd$', r'^kd_.*',  # kd/kode patterns
-            r'.*code$', r'^code.*', r'.*_code$', r'^code_.*',  # code patterns
-            r'.*key$', r'^key.*', r'.*_key$', r'^key_.*',  # key patterns
-            r'.*uuid$', r'^uuid.*',  # uuid patterns
-            r'.*index$', r'^index.*',  # index patterns
-            r'.*pk$', r'^pk.*'  # primary key patterns
-        ]
+        # Object/string columns
+        elif df[col].dtype == 'object':
+            if unique_count == 2:
+                binary_columns.append({
+                    'column': col,
+                    'binary_type': 'string_binary',
+                    'unique_values': df[col].dropna().unique().tolist(),
+                    'reasons': ['Exactly 2 unique values (fallback method)'],
+                    'recommendation': 'Binary string column'
+                })
+            elif uniqueness_ratio > 0.95:
+                identifier_columns.append({
+                    'column': col,
+                    'identifier_type': 'string_identifier',
+                    'confidence_score': uniqueness_ratio,
+                    'reasons': ['High uniqueness ratio (fallback method)'],
+                    'recommendation': 'Potential string identifier'
+                })
+            elif unique_count <= 50:  # Low cardinality
+                categorical_columns.append({
+                    'column': col,
+                    'categorical_type': 'low_cardinality',
+                    'reasons': ['Low cardinality string (fallback method)'],
+                    'recommendation': 'Categorical column'
+                })
+            else:
+                string_columns.append({
+                    'column': col,
+                    'string_type': 'text',
+                    'reasons': ['High cardinality string (fallback method)'],
+                    'recommendation': 'Text column'
+                })
         
-        import re
-        is_id_like = any(re.match(pattern, col_lower) for pattern in id_patterns)
-        
-        # Additional ID indicators
-        id_keywords = ['customer', 'user', 'transaction', 'order', 'product', 'employee', 'account']
-        has_id_keyword = any(keyword in col_lower for keyword in id_keywords)
-        
-        # c. Analisis Sequential Pattern - Check if values are sequential
-        is_sequential = False
-        sequential_pattern = 'none'
-        
-        if df[col].dtype in ['int64', 'float64']:
-            try:
-                # Remove null values and sort
-                non_null_values = df[col].dropna().sort_values()
-                if len(non_null_values) > 3:  # Need enough data to analyze
-                    # Check if values are mostly sequential (allowing some gaps)
-                    diffs = non_null_values.diff().dropna()
-                    
-                    # Perfect sequential: mostly differences of 1
-                    if (diffs == 1).sum() / len(diffs) > 0.8:
-                        is_sequential = True
-                        sequential_pattern = 'perfect_incremental'
-                    
-                    # Nearly sequential: small consistent differences
-                    elif diffs.std() < diffs.mean() * 0.1 and diffs.mean() <= 10:
-                        is_sequential = True
-                        sequential_pattern = 'nearly_incremental'
-                    
-                    # Large gaps but still ordered
-                    elif (diffs > 0).sum() / len(diffs) > 0.9:
-                        sequential_pattern = 'ordered_with_gaps'
-            except:
-                pass
-        
-        # Decision Logic: Determine if column is likely an ID
-        confidence_score = 0
-        
-        # High uniqueness is the strongest indicator
-        if uniqueness_ratio > 0.98:
-            confidence_score += 40
-        elif uniqueness_ratio > 0.95:
-            confidence_score += 30
-        elif uniqueness_ratio > 0.90:
-            confidence_score += 20
-        
-        # Name pattern matching
-        if is_id_like:
-            confidence_score += 30
-        elif has_id_keyword:
-            confidence_score += 15
-        
-        # Sequential pattern
-        if is_sequential:
-            confidence_score += 20
-        elif sequential_pattern == 'ordered_with_gaps':
-            confidence_score += 10
-        
-        # No null values (IDs should be complete)
-        null_count = df[col].isnull().sum()
-        if null_count == 0:
-            confidence_score += 10
-        elif null_count < total_rows * 0.01:  # Less than 1% nulls
-            confidence_score += 5
-        
-        # Data type appropriateness
-        if df[col].dtype in ['int64', 'object']:  # IDs are usually integers or strings
-            confidence_score += 5
-        
-        # Consider it a primary key candidate if confidence is high enough
-        if confidence_score >= 50 or (uniqueness_ratio > 0.95 and is_id_like):
-            primary_key_candidates.append({
+        # Boolean columns
+        elif df[col].dtype == 'bool':
+            binary_columns.append({
                 'column': col,
-                'uniqueness_ratio': float(uniqueness_ratio),
-                'unique_count': int(unique_count),
-                'total_rows': int(total_rows),
-                'is_id_like': is_id_like,
-                'has_id_keyword': has_id_keyword,
-                'is_sequential': is_sequential,
-                'sequential_pattern': sequential_pattern,
-                'null_count': int(null_count),
-                'confidence_score': confidence_score,
-                'data_type': str(df[col].dtype),
-                'recommendation': 'Primary/Unique Key - exclude from ML features, tidak berlaku untuk Mean/Std Dev'
+                'binary_type': 'boolean',
+                'unique_values': df[col].dropna().unique().tolist(),
+                'reasons': ['Boolean data type (fallback method)'],
+                'recommendation': 'Boolean column'
+            })
+        
+        # Datetime columns
+        elif 'datetime' in str(df[col].dtype):
+            date_columns.append({
+                'column': col,
+                'date_format_type': 'datetime',
+                'reasons': ['Datetime data type (fallback method)'],
+                'recommendation': 'Date/time column'
             })
     
-    # Sort by confidence score (highest first)
-    primary_key_candidates.sort(key=lambda x: x['confidence_score'], reverse=True)
-    
-    return primary_key_candidates
+    return {
+        'numeric_columns': numeric_columns,
+        'categorical_columns': categorical_columns,
+        'binary_columns': binary_columns,
+        'date_columns': date_columns,
+        'string_columns': string_columns,
+        'identifier_columns': identifier_columns,
+        'foreign_key_columns': foreign_key_columns,
+        'summary': {
+            'total_columns': len(df.columns),
+            'data_types_detected': {
+                'numeric': len(numeric_columns),
+                'categorical': len(categorical_columns),
+                'binary': len(binary_columns),
+                'date': len(date_columns),
+                'string': len(string_columns),
+                'identifier': len(identifier_columns),
+                'foreign_key': len(foreign_key_columns)
+            },
+            'recommendations': ['Used simple fallback detection method']
+        }
+    }
+
+
+
+
 
 def perform_data_integration(df):
     """Perform data integration techniques"""
@@ -835,6 +1074,9 @@ def perform_data_reduction(df, reduction_options=None):
 
 def generate_enhanced_data_quality_report(df):
     """Generate comprehensive data quality report with advanced insights"""
+    # Gunakan YData Profiling untuk deteksi tipe data
+    ydata_result = detect_data_types(df)
+    
     report = {
         'basic_info': {
             'shape': df.shape,
@@ -842,11 +1084,14 @@ def generate_enhanced_data_quality_report(df):
             'dtypes': df.dtypes.astype(str).to_dict()
         },
         'data_types': {
-            'numeric_columns': list(df.select_dtypes(include=[np.number]).columns),
-            'categorical_columns': list(df.select_dtypes(include=['object']).columns),
-            'binary_columns': detect_binary_columns(df),
-            'categorical_analysis': detect_categorical_columns(df),
-            'primary_key_candidates': detect_primary_key_columns(df)
+            'numeric_columns': ydata_result['numeric_columns'],
+            'categorical_columns': ydata_result['categorical_columns'],
+            'binary_columns': ydata_result['binary_columns'],
+            'identifier_columns': ydata_result['identifier_columns'],
+            'foreign_key_columns': ydata_result['foreign_key_columns'],
+            'string_columns': ydata_result['string_columns'],
+            'date_columns': ydata_result['date_columns'],
+            'primary_key_candidates': ydata_result['identifier_columns']
         },
         'data_quality': {
             'missing_values': df.isnull().sum().to_dict(),
@@ -1007,11 +1252,11 @@ def preprocess_data(df, columns=None):
                 raise ValueError("None of the selected columns exist in the dataframe")
             df = df[existing_columns].copy()
         
-        # Detect and exclude primary key columns to avoid bias
-        primary_key_candidates = detect_primary_key_columns(df)
+        # Detect and exclude primary key columns to avoid bias using YData Profiling
+        all_data_types = detect_data_types(df)
         excluded_pk_columns = []
         
-        for pk_info in primary_key_candidates:
+        for pk_info in all_data_types['identifier_columns']:
             col = pk_info['column']
             if pk_info['uniqueness_ratio'] > 0.95:  # Highly unique columns
                 excluded_pk_columns.append(col)
@@ -1193,9 +1438,9 @@ def evaluate_model_performance(model, X_test, y_test, model_type):
         'prediction_probabilities': prediction_proba.tolist() if prediction_proba is not None else None
     }
 
-@app.route('/api/detect-categorical', methods=['POST'])
-def detect_categorical():
-    """API endpoint to detect categorical columns in provided data"""
+@app.route('/api/detect-data-types', methods=['POST'])
+def detect_all_data_types():
+    """API endpoint to detect all data types using YData Profiling"""
     try:
         data = request.get_json()
         
@@ -1208,11 +1453,178 @@ def detect_categorical():
         if df.empty:
             return jsonify({'error': 'Empty dataset provided'}), 400
         
-        # Detect categorical columns
-        categorical_columns = detect_categorical_columns(df)
+        print(f"🔍 Starting YData Profiling analysis for {len(df.columns)} columns, {len(df)} rows")
         
-        # Also detect binary columns as they are a subset of categorical
-        binary_columns = detect_binary_columns(df)
+        # Gunakan YData Profiling untuk deteksi tipe data otomatis
+        result = detect_data_types(df)
+        
+        # Tambahkan primary key candidates dari identifier columns
+        result['primary_key_candidates'] = result['identifier_columns']
+        
+        # Update summary dengan informasi YData Profiling
+        result['summary']['description'] = 'Advanced data type detection using YData Profiling'
+        result['summary']['detection_methods'] = [
+            'YData Profiling: Automated intelligent data type detection',
+            'Numeric: Continuous values, monetary patterns, measured values',
+            'Categorical: Text-based categories, low/moderate cardinality',
+            'Binary: Boolean, yes/no, true/false, gender, status patterns',
+            'Identifier: Primary keys, unique identifiers (>95% uniqueness)',
+            'Foreign Key: Reference columns with moderate cardinality',
+            'String: Long text suitable for NLP analysis',
+            'Date: Temporal data with datetime patterns'
+        ]
+        
+        print("✅ YData Profiling analysis completed successfully")
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Error in YData Profiling analysis: {e}")
+        return jsonify({'error': f'Data type detection failed: {str(e)}'}), 500
+
+@app.route('/api/detect-string', methods=['POST'])
+def detect_string():
+    """API endpoint to detect string/text columns using YData Profiling"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Gunakan YData Profiling untuk deteksi
+        ydata_result = detect_data_types(df)
+        string_columns = ydata_result['string_columns']
+        
+        result = {
+            'string_columns': string_columns,
+            'total_columns': len(df.columns),
+            'string_count': len(string_columns),
+            'summary': {
+                'description': 'String/text column detection using YData Profiling',
+                'criteria': [
+                    'Detected as Text type by YData Profiling',
+                    'Long text content (>50 characters average)',
+                    'Suitable for NLP analysis',
+                    'Contains descriptive text patterns'
+                ]
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'String detection failed: {str(e)}'}), 500
+
+@app.route('/api/detect-foreign-key', methods=['POST'])
+def detect_foreign_key():
+    """API endpoint to detect foreign key columns using YData Profiling"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Gunakan YData Profiling untuk deteksi
+        ydata_result = detect_data_types(df)
+        foreign_key_columns = ydata_result['foreign_key_columns']
+        
+        result = {
+            'foreign_key_columns': foreign_key_columns,
+            'total_columns': len(df.columns),
+            'foreign_key_count': len(foreign_key_columns),
+            'summary': {
+                'description': 'Foreign key detection using YData Profiling',
+                'criteria': [
+                    'Moderate cardinality detected by YData Profiling',
+                    'Numeric columns with reference patterns',
+                    'Medium uniqueness ratio (10-80%)',
+                    'Potential foreign key relationships'
+                ]
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Foreign key detection failed: {str(e)}'}), 500
+
+@app.route('/api/detect-date', methods=['POST'])
+def detect_date():
+    """API endpoint to detect date columns using YData Profiling"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Gunakan YData Profiling untuk deteksi
+        ydata_result = detect_data_types(df)
+        date_columns = ydata_result['date_columns']
+        
+        result = {
+            'date_columns': date_columns,
+            'total_columns': len(df.columns),
+            'date_count': len(date_columns),
+            'summary': {
+                'description': 'Date/time column detection using YData Profiling',
+                'formats_detected': [
+                    'DateTime type detected by YData Profiling',
+                    'Automatic temporal pattern recognition',
+                    'ISO date, US date, and custom formats',
+                    'Suitable for time series analysis'
+                ]
+            }
+        }
+        
+        return safe_json_response(convert_numpy_types(result))
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Date detection failed: {str(e)}'}), 500
+
+@app.route('/api/detect-categorical', methods=['POST'])
+def detect_categorical():
+    """API endpoint to detect categorical columns using YData Profiling"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'data' not in data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Convert data to DataFrame
+        df = pd.DataFrame(data['data'])
+        
+        if df.empty:
+            return jsonify({'error': 'Empty dataset provided'}), 400
+        
+        # Gunakan YData Profiling untuk deteksi
+        ydata_result = detect_data_types(df)
+        categorical_columns = ydata_result['categorical_columns']
+        binary_columns = ydata_result['binary_columns']
         
         result = {
             'categorical_columns': categorical_columns,
@@ -1221,13 +1633,13 @@ def detect_categorical():
             'categorical_count': len(categorical_columns),
             'binary_count': len(binary_columns),
             'summary': {
-                'description': 'Categorical column detection completed',
+                'description': 'Categorical column detection using YData Profiling',
                 'methodology': [
-                    'String/object data types',
-                    'Low uniqueness ratio (<5%)',
-                    'Small unique value count (≤20)',
-                    'Integer columns with moderate cardinality (≤50)',
-                    'Boolean data types'
+                    'Categorical type detected by YData Profiling',
+                    'Intelligent cardinality analysis',
+                    'Text-based and numeric categorical detection',
+                    'Binary subset identification (exactly 2 values)',
+                    'Automatic encoding recommendations'
                 ]
             }
         }
@@ -1241,7 +1653,7 @@ def detect_categorical():
 
 @app.route('/api/detect-binary', methods=['POST'])
 def detect_binary():
-    """API endpoint to detect binary columns in provided data"""
+    """API endpoint to detect binary columns using YData Profiling"""
     try:
         data = request.get_json()
         
@@ -1254,22 +1666,22 @@ def detect_binary():
         if df.empty:
             return jsonify({'error': 'Empty dataset provided'}), 400
         
-        # Detect binary columns
-        binary_columns = detect_binary_columns(df)
+        # Gunakan YData Profiling untuk deteksi
+        ydata_result = detect_data_types(df)
+        binary_columns = ydata_result['binary_columns']
         
         result = {
             'binary_columns': binary_columns,
             'total_columns': len(df.columns),
             'binary_count': len(binary_columns),
             'summary': {
-                'description': 'Binary column detection completed',
+                'description': 'Binary column detection using YData Profiling',
                 'types_detected': [
-                    'Numeric binary (0/1)',
-                    'Boolean (True/False)',
-                    'Yes/No patterns',
-                    'Gender (Male/Female)',
-                    'Status (Active/Inactive)',
-                    'Pass/Fail patterns'
+                    'Boolean type detected by YData Profiling',
+                    'Categorical with exactly 2 unique values',
+                    'Numeric binary (0/1), Boolean (True/False)',
+                    'Yes/No, Gender, Status patterns',
+                    'Automatic binary pattern recognition'
                 ]
             }
         }
@@ -1283,7 +1695,7 @@ def detect_binary():
 
 @app.route('/api/detect-primary-key', methods=['POST'])
 def detect_primary_key():
-    """API endpoint to detect primary key columns in provided data"""
+    """API endpoint to detect primary key columns using YData Profiling"""
     try:
         data = request.get_json()
         
@@ -1296,21 +1708,22 @@ def detect_primary_key():
         if df.empty:
             return jsonify({'error': 'Empty dataset provided'}), 400
         
-        # Detect primary key columns
-        primary_key_candidates = detect_primary_key_columns(df)
+        # Gunakan YData Profiling untuk deteksi
+        ydata_result = detect_data_types(df)
+        primary_key_candidates = ydata_result['identifier_columns']
         
         result = {
             'primary_key_candidates': primary_key_candidates,
             'total_columns': len(df.columns),
             'candidate_count': len(primary_key_candidates),
             'summary': {
-                'description': 'Primary key detection completed',
+                'description': 'Primary key detection using YData Profiling',
                 'criteria': [
-                    'High uniqueness ratio (>80%)',
-                    'ID-like naming patterns',
-                    'Sequential value patterns',
-                    'Minimal null values',
-                    'Appropriate data types'
+                    'Unique identifier detection by YData Profiling',
+                    'High uniqueness ratio (>95%)',
+                    'Automatic ID pattern recognition',
+                    'Primary key and unique identifier classification',
+                    'Confidence score based analysis'
                 ]
             }
         }
@@ -1584,9 +1997,10 @@ def analyze_data():
         
         df = clean_dataframe(df)
         
-        # Enhanced column type detection
-        binary_columns = detect_binary_columns(df)
-        primary_key_columns = detect_primary_key_columns(df)
+        # Enhanced column type detection using YData Profiling
+        all_data_types = detect_data_types(df)
+        binary_columns = all_data_types['binary_columns']
+        primary_key_columns = all_data_types['identifier_columns']
         
         # Create lookup sets for faster checking
         binary_column_names = {col['column'] for col in binary_columns}
@@ -1603,13 +2017,12 @@ def analyze_data():
                 pk_info = next(pk for pk in primary_key_columns if pk['column'] == column)
                 stats[column] = {
                     'type': 'identifier',
-                    'subtype': 'primary_key',
+                    'subtype': pk_info.get('identifier_type', 'primary_key'),
                     'unique_count': int(pk_info['unique_count']),
                     'uniqueness_ratio': float(pk_info['uniqueness_ratio']),
-                    'confidence_score': pk_info['confidence_score'],
-                    'is_sequential': pk_info['is_sequential'],
+                    'confidence_score': pk_info.get('confidence_score', 1.0),
                     'count': int(df[column].count()),
-                    'null_count': int(pk_info['null_count']),
+                    'null_count': int(pk_info.get('missing_count', df[column].isnull().sum())),
                     'recommendation': pk_info['recommendation']
                 }
             elif column in binary_column_names:
@@ -1618,11 +2031,11 @@ def analyze_data():
                 stats[column] = {
                     'type': 'binary',
                     'subtype': binary_info['binary_type'],
-                    'values': binary_info['values'],
-                    'is_strict_binary': binary_info['is_strict_binary'],
+                    'values': binary_info['unique_values'],
+                    'is_strict_binary': binary_info.get('is_strict_binary', True),
                     'unique_count': int(binary_info['unique_count']),
                     'count': int(df[column].count()),
-                    'null_count': int(df[column].isnull().sum()),
+                    'null_count': int(binary_info.get('missing_count', df[column].isnull().sum())),
                     'recommendation': binary_info['recommendation']
                 }
             elif df[column].dtype in ['int64', 'float64', 'Int64']:
