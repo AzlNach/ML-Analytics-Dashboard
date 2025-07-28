@@ -358,6 +358,94 @@ class MLAnalyticsAPI {
         }
     }
 
+    static async detectAllDataTypes(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-data-types`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Data type detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Data type detection failed:', error);
+            throw error;
+        }
+    }
+
+    static async detectStringColumns(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-string`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'String detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('String detection failed:', error);
+            throw error;
+        }
+    }
+
+    static async detectForeignKeyColumns(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-foreign-key`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Foreign key detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Foreign key detection failed:', error);
+            throw error;
+        }
+    }
+
+    static async detectDateColumns(data) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/detect-date`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ data }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Date detection failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Date detection failed:', error);
+            throw error;
+        }
+    }
+
     static async detectCategoricalColumns(data) {
         try {
             const response = await fetch(`${API_BASE_URL}/detect-categorical`, {
