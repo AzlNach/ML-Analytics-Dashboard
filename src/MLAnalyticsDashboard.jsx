@@ -496,14 +496,19 @@ const MLAnalyticsDashboard = () => {
         return typeof firstValue === 'number';
       });
       
-      // Use backend to detect categorical columns
+      // Use enhanced backend data type detection
       let categoricalCols = [];
+      let allDataTypes = null;
       try {
-        const categoricalResult = await MLAnalyticsAPI.detectCategoricalColumns(parsed.rows);
-        categoricalCols = categoricalResult.categorical_columns.map(col => col.column);
-        console.log('Detected categorical columns from backend:', categoricalCols);
+        const dataTypeResult = await MLAnalyticsAPI.detectAllDataTypes(parsed.rows);
+        allDataTypes = dataTypeResult;
+        
+        // Extract categorical columns from enhanced detection
+        categoricalCols = dataTypeResult.categorical_columns.map(col => col.column);
+        console.log('Enhanced data type detection from backend:', dataTypeResult);
+        console.log('Detected categorical columns:', categoricalCols);
       } catch (error) {
-        console.warn('Failed to detect categorical columns from backend, using fallback:', error);
+        console.warn('Failed to detect data types from backend, using fallback:', error);
         // Fallback to simple string detection
         categoricalCols = parsed.headers.filter(h => {
           const firstValue = parsed.rows[0]?.[h];
@@ -636,14 +641,15 @@ const MLAnalyticsDashboard = () => {
       // Decision Tree - Use a more flexible approach for target column selection
       let decisionTreeResult = null;
       
-      // Look for categorical columns using backend detection
+      // Look for categorical columns using enhanced backend detection
       let categoricalColumns = [];
       try {
-        const categoricalResult = await MLAnalyticsAPI.detectCategoricalColumns(data);
-        categoricalColumns = categoricalResult.categorical_columns.map(col => col.column);
-        console.log('Backend detected categorical columns:', categoricalColumns);
+        const dataTypeResult = await MLAnalyticsAPI.detectAllDataTypes(data);
+        categoricalColumns = dataTypeResult.categorical_columns.map(col => col.column);
+        console.log('Enhanced backend detected categorical columns:', categoricalColumns);
+        console.log('All detected data types:', dataTypeResult);
       } catch (error) {
-        console.warn('Failed to get categorical columns from backend, using analysis fallback:', error);
+        console.warn('Failed to get enhanced data types from backend, using analysis fallback:', error);
         // Fallback to analysis stats
         categoricalColumns = columns.filter(col => 
           analysis?.stats[col]?.type === 'categorical'
@@ -1742,10 +1748,10 @@ const MLAnalyticsDashboard = () => {
                     return sampleValues.length > 0 && sampleValues.every(val => !isNaN(parseFloat(val)));
                   });
                   
-                  // Use categorical detection from backend if available, otherwise use local logic
+                  // Use enhanced categorical detection from backend if available, otherwise use local logic
                   let categoricalCols = columns.filter(col => !numericCols.includes(col));
-                  if (analysis?.data_types?.categorical_analysis) {
-                    categoricalCols = analysis.data_types.categorical_analysis.map(col => col.column);
+                  if (analysis?.data_types?.categorical_columns) {
+                    categoricalCols = analysis.data_types.categorical_columns.map(col => col.column);
                   }
                   
                   // Prepare chart data
