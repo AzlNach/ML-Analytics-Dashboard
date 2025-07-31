@@ -380,6 +380,31 @@ class MLAnalyticsAPI {
         }
     }
 
+    static async updateColumnTypes(data, columnTypeOverrides) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/update-column-types`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    data,
+                    column_type_overrides: columnTypeOverrides
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Column type update failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Column type update failed:', error);
+            throw error;
+        }
+    }
+
     static async detectStringColumns(data) {
         try {
             const response = await fetch(`${API_BASE_URL}/detect-string`, {
@@ -580,6 +605,35 @@ class MLAnalyticsAPI {
             return await response.json();
         } catch (error) {
             console.error('Data reduction failed:', error);
+            throw error;
+        }
+    }
+
+    static async updateColumnTypes(data, columnTypeOverrides) {
+        try {
+            console.log('Updating column types with overrides:', columnTypeOverrides);
+
+            const response = await fetch(`${API_BASE_URL}/update-column-types`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    data,
+                    column_type_overrides: columnTypeOverrides
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Column type update failed');
+            }
+
+            const result = await response.json();
+            console.log('Column types updated successfully:', result);
+            return result;
+        } catch (error) {
+            console.error('Column type update failed:', error);
             throw error;
         }
     }
