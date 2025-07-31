@@ -22,7 +22,19 @@ if [ -d "venv311" ]; then
     echo "Virtual environment already exists. Removing old one..."
     rm -rf venv311
 fi
-python3 -m venv venv311
+
+# Try Python 3.11 first, then fallback to python3
+if command -v python3.11 &> /dev/null; then
+    echo "Using Python 3.11..."
+    python3.11 -m venv venv311
+elif command -v python3 &> /dev/null; then
+    echo "Using python3..."
+    python3 -m venv venv311
+else
+    echo "ERROR: Python 3.11+ is required but not found"
+    echo "Please install Python 3.11+ from https://python.org"
+    exit 1
+fi
 
 # Activate virtual environment and install dependencies
 echo

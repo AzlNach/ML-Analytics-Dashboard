@@ -23,7 +23,16 @@ if exist venv311 (
     echo Virtual environment already exists. Removing old one...
     rmdir /s /q venv311
 )
-python -m venv venv311
+REM Try Python 3.11 first, then fallback to python3, then python
+python3.11 -m venv venv311 >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Python 3.11 not found, trying python3...
+    python3 -m venv venv311 >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo python3 not found, using python...
+        python -m venv venv311
+    )
+)
 
 REM Activate virtual environment and install dependencies
 echo.

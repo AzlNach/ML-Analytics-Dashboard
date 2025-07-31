@@ -4,6 +4,7 @@ import { ResponsiveContainer, BarChart, ScatterChart, CartesianGrid, XAxis, YAxi
 import MLAnalyticsAPI from './services/api';
 import ModelTrainingComponent from './ModelTrainingComponent';
 import PredictionComponent from './PredictionComponent';
+import DataTypeCustomizer from './DataTypeCustomizer';
 import './dashboard.css';
 
 const MLAnalyticsDashboard = () => {
@@ -185,10 +186,21 @@ const MLAnalyticsDashboard = () => {
 
   // Function to clean data for API calls
   const cleanDataForAPI = (data) => {
-    console.log('Cleaning data for API, input length:', data.length);
+    console.log('Cleaning data for API, input length:', data?.length || 0);
     
-    const cleanedData = data.map((row, rowIndex) => {
+    if (!data || !Array.isArray(data)) {
+      console.warn('Invalid data provided to cleanDataForAPI');
+      return [];
+    }
+    
+    const cleanedData = data.filter(row => row && typeof row === 'object').map((row, rowIndex) => {
       const cleanRow = {};
+      
+      if (!row || typeof row !== 'object') {
+        console.warn(`Invalid row at index ${rowIndex}:`, row);
+        return null;
+      }
+      
       Object.keys(row).forEach(key => {
         let value = row[key];
         
@@ -248,7 +260,7 @@ const MLAnalyticsDashboard = () => {
         }
       });
       return cleanRow;
-    });
+    }).filter(row => row !== null);
     
     console.log('Data cleaning completed, output length:', cleanedData.length);
     if (cleanedData.length > 0) {
@@ -1178,7 +1190,31 @@ const MLAnalyticsDashboard = () => {
     </div>
   );
 
-  const renderOverviewTab = () => (
+  const renderOverviewTab = () => {
+    // Validate data before rendering
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      return (
+        <div className="p-8">
+          <div className="max-w-7xl mx-auto">
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-12 text-center">
+              <div className="text-6xl mb-6">⚠️</div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-4">No Data Available</h3>
+              <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                Please upload a valid CSV dataset first to see the data analysis.
+              </p>
+              <button
+                onClick={() => setActiveTab('upload')}
+                className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Upload Dataset
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
@@ -1341,6 +1377,17 @@ const MLAnalyticsDashboard = () => {
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Data Type Customizer */}
+        {analysis && data && (
+          <div className="mb-8">
+            <DataTypeCustomizer 
+              data={data} 
+              analysis={analysis} 
+              onUpdateAnalysis={setAnalysis}
+            />
           </div>
         )}
 
@@ -1744,7 +1791,7 @@ const MLAnalyticsDashboard = () => {
                   
                   // Get column types for better chart handling
                   const numericCols = columns.filter(col => {
-                    const sampleValues = data.slice(0, 10).map(row => row[col]).filter(val => val !== null && val !== undefined);
+                    const sampleValues = data.slice(0, 10).filter(row => row && row[col] !== undefined && row[col] !== null).map(row => row[col]).filter(val => val !== null && val !== undefined);
                     return sampleValues.length > 0 && sampleValues.every(val => !isNaN(parseFloat(val)));
                   });
                   
@@ -1755,7 +1802,7 @@ const MLAnalyticsDashboard = () => {
                   }
                   
                   // Prepare chart data
-                  const chartData = data.slice(0, 50).map((row, index) => {
+                  const chartData = data.slice(0, 50).filter(row => row && typeof row === 'object').map((row, index) => {
                     const xValue = row[xAxisCol];
                     const yValue = numericCols.includes(yAxisCol) ? parseFloat(row[yAxisCol]) || 0 : row[yAxisCol];
                     
@@ -1848,18 +1895,18 @@ const MLAnalyticsDashboard = () => {
                     
                     if (selectedChartType === 'radar' && numericCols.length >= 3) {
                       // For radar chart, we need multiple numeric dimensions
-                      const radarData = data.slice(0, 10).map((row, index) => {
+                      const radarData = data.slice(0, 10).filter(row => row && typeof row === 'object').map((row, index) => {
                         const dataPoint = { 
-                          name: row[xAxisCol] || `Item ${index + 1}`,
+                          name: (row && row[xAxisCol]) ? row[xAxisCol] : `Item ${index + 1}`,
                           fullMark: 100 // Maximum value for radar chart
                         };
                         
                         // Normalize numeric values to 0-100 scale for better visualization
                         numericCols.slice(0, 6).forEach(col => {
-                          const value = parseFloat(row[col]) || 0;
-                          const columnValues = data.map(r => parseFloat(r[col])).filter(v => !isNaN(v));
-                          const max = Math.max(...columnValues);
-                          const min = Math.min(...columnValues);
+                          const value = (row && row[col] !== undefined && row[col] !== null) ? parseFloat(row[col]) || 0 : 0;
+                          const columnValues = data.filter(r => r && r[col] !== undefined && r[col] !== null).map(r => parseFloat(r[col])).filter(v => !isNaN(v));
+                          const max = columnValues.length > 0 ? Math.max(...columnValues) : 100;
+                          const min = columnValues.length > 0 ? Math.min(...columnValues) : 0;
                           const normalized = max > min ? ((value - min) / (max - min)) * 100 : 50;
                           dataPoint[col] = Math.round(normalized);
                         });
@@ -1941,7 +1988,7 @@ const MLAnalyticsDashboard = () => {
                                     </td>
                                     {numericCols.slice(0, 6).map(col => (
                                       <td key={col} className="px-4 py-2 text-sm text-gray-900">
-                                        {data[index] && data[index][col] !== null && data[index][col] !== undefined 
+                                        {data && data[index] && data[index][col] !== null && data[index][col] !== undefined 
                                           ? parseFloat(data[index][col]).toFixed(2) 
                                           : 'N/A'}
                                       </td>
@@ -1993,7 +2040,7 @@ const MLAnalyticsDashboard = () => {
                     if (selectedChartType === 'histogram' && numericCols.length > 0) {
                       // Create histogram data
                       const numericCol = numericCols[0];
-                      const values = data.map(row => parseFloat(row[numericCol])).filter(val => !isNaN(val));
+                      const values = data.filter(row => row && row[numericCol] !== undefined && row[numericCol] !== null).map(row => parseFloat(row[numericCol])).filter(val => !isNaN(val));
                       const min = Math.min(...values);
                       const max = Math.max(...values);
                       const bins = 10;
